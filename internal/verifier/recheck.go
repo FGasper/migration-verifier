@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -30,43 +31,74 @@ type RecheckDoc struct {
 	DataSize   int               `bson:"dataSize"`
 }
 
+type recheckSpec struct {
+	dbName   string
+	collName string
+	docID    any
+	dataSize int
+}
+
 // InsertFailedCompareRecheckDocs is for inserting RecheckDocs based on failures during Check.
 func (verifier *Verifier) InsertFailedCompareRecheckDocs(
 	namespace string, documentIDs []interface{}, dataSizes []int) error {
 	dbName, collName := SplitNamespace(namespace)
-	return verifier.insertRecheckDocs(context.Background(),
-		dbName, collName, documentIDs, dataSizes)
-}
 
-func (verifier *Verifier) InsertChangeEventRecheckDoc(ctx context.Context, changeEvent *ParsedEvent) error {
-	documentIDs := []interface{}{changeEvent.DocKey.ID}
-
-	// We don't know the document sizes for documents for all change events,
-	// so just be conservative and assume they are maximum size.
-	//
-	// Note that this prevents us from being able to report a meaningful
-	// total data size for noninitial generations in the log.
-	dataSizes := []int{maxBSONObjSize}
+	recheckSpecs := lo.Map(
+		documentIDs,
+		func(id any, i int) recheckSpec {
+			return recheckSpec{
+				dbName:   dbName,
+				collName: collName,
+				docID:    id,
+				dataSize: dataSizes[i],
+			}
+		},
+	)
 
 	return verifier.insertRecheckDocs(
-		ctx, changeEvent.Ns.DB, changeEvent.Ns.Coll, documentIDs, dataSizes)
+		context.Background(),
+		recheckSpecs,
+	)
+}
+
+func (verifier *Verifier) InsertChangeEventRecheckDocs(ctx context.Context, changeEvents []ParsedEvent) error {
+	recheckSpecs := lo.Map(
+		changeEvents,
+		func(event ParsedEvent, i int) recheckSpec {
+			return recheckSpec{
+				dbName:   event.Ns.DB,
+				collName: event.Ns.Coll,
+				docID:    event.DocKey.ID,
+
+				// We don't know the document sizes for documents for all change events,
+				// so just be conservative and assume they are maximum size.
+				//
+				// Note that this prevents us from being able to report a meaningful
+				// total data size for noninitial generations in the log.
+				dataSize: maxBSONObjSize,
+			}
+		},
+	)
+
+	return verifier.insertRecheckDocs(ctx, recheckSpecs)
 }
 
 func (verifier *Verifier) insertRecheckDocs(
 	ctx context.Context,
-	dbName, collName string, documentIDs []interface{}, dataSizes []int) error {
+	recheckSpecs []recheckSpec,
+) error {
 	verifier.mux.Lock()
 	defer verifier.mux.Unlock()
 
 	generation, _ := verifier.getGenerationWhileLocked()
 
 	models := []mongo.WriteModel{}
-	for i, documentID := range documentIDs {
+	for _, rSpec := range recheckSpecs {
 		pk := RecheckPrimaryKey{
 			Generation:     generation,
-			DatabaseName:   dbName,
-			CollectionName: collName,
-			DocumentID:     documentID,
+			DatabaseName:   rSpec.dbName,
+			CollectionName: rSpec.collName,
+			DocumentID:     rSpec.docID,
 		}
 
 		// The filter must exclude DataSize; otherwise, if a failed comparison
@@ -78,7 +110,7 @@ func (verifier *Verifier) insertRecheckDocs(
 
 		recheckDoc := RecheckDoc{
 			PrimaryKey: pk,
-			DataSize:   dataSizes[i],
+			DataSize:   rSpec.dataSize,
 		}
 
 		models = append(models,

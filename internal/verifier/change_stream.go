@@ -2,11 +2,12 @@ package verifier
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/10gen/migration-verifier/internal/keystring"
+	mapset "github.com/deckarep/golang-set/v2"
+	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -32,26 +33,29 @@ type DocKey struct {
 	ID interface{} `bson:"_id"`
 }
 
+var knownEventTypes = mapset.NewSet(
+	"insert",
+	"update",
+	"replace",
+	"delete",
+)
+
 // HandleChangeStreamEvent performs the necessary work for change stream events that occur during
 // operation.
-func (verifier *Verifier) HandleChangeStreamEvent(ctx context.Context, changeEvent *ParsedEvent) error {
-	if changeEvent.ClusterTime != nil &&
-		(verifier.lastChangeEventTime == nil ||
-			verifier.lastChangeEventTime.Compare(*changeEvent.ClusterTime) < 0) {
-		verifier.lastChangeEventTime = changeEvent.ClusterTime
+func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, changeEvents []ParsedEvent) error {
+	for _, changeEvent := range changeEvents {
+		if changeEvent.ClusterTime != nil &&
+			(verifier.lastChangeEventTime == nil ||
+				verifier.lastChangeEventTime.Compare(*changeEvent.ClusterTime) < 0) {
+			verifier.lastChangeEventTime = changeEvent.ClusterTime
+		}
+
+		if !knownEventTypes.Contains(changeEvent.OpType) {
+			return errors.New(`Not supporting: "` + changeEvent.OpType + `" events`)
+		}
 	}
-	switch changeEvent.OpType {
-	case "delete":
-		fallthrough
-	case "insert":
-		fallthrough
-	case "replace":
-		fallthrough
-	case "update":
-		return verifier.InsertChangeEventRecheckDoc(ctx, changeEvent)
-	default:
-		return errors.New(`Not supporting: "` + changeEvent.OpType + `" events`)
-	}
+
+	return verifier.InsertChangeEventRecheckDocs(ctx, changeEvents)
 }
 
 func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
@@ -65,6 +69,34 @@ func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
 	}
 	stage := bson.D{{"$match", bson.D{{"$or", filter}}}}
 	return []bson.D{stage}
+}
+
+type cursorLike interface {
+	Decode(any) error
+	RemainingBatchLength() int
+	TryNext(context.Context) bool
+}
+
+func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
+	for {
+		var obj T
+
+		if err := cursor.Decode(&obj); err != nil {
+			return errors.Wrapf(err, "failed to decode document to %T", obj)
+		}
+
+		*target = append(*target, obj)
+
+		if cursor.RemainingBatchLength() == 0 {
+			break
+		}
+
+		if !cursor.TryNext(context.Background()) {
+			panic("should already be another document waiting")
+		}
+	}
+
+	return nil
 }
 
 // StartChangeStream starts the change stream.
@@ -81,10 +113,13 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context, startTime *prim
 			// be no message until the user has guaranteed writes to the source have ended.
 			case <-verifier.changeStreamEnderChan:
 				for cs.TryNext(ctx) {
-					if err := cs.Decode(&changeEvent); err != nil {
-						verifier.logger.Fatal().Err(err).Msg("Failed to decode change event")
+					events := []ParsedEvent{}
+					err := exhaustCursorBatch(cs, &events)
+					if err != nil {
+						verifier.logger.Fatal().Err(err).Msg("Failed to read change events")
 					}
-					err := verifier.HandleChangeStreamEvent(ctx, &changeEvent)
+
+					err = verifier.HandleChangeStreamEvents(ctx, events)
 					if err != nil {
 						verifier.changeStreamErrChan <- err
 						verifier.logger.Fatal().Err(err).Msg("Error handling change event")
