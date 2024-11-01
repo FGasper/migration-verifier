@@ -7,7 +7,6 @@ package verifier
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/types"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -90,9 +90,12 @@ type VerificationRange struct {
 }
 
 func (verifier *Verifier) insertCollectionVerificationTask(
-	ctx context.Context,
+	ctx mongo.SessionContext,
 	srcNamespace string,
 	generation int) (*VerificationTask, error) {
+	if mongo.SessionFromContext(ctx) == nil {
+		panic("should happen within a session")
+	}
 
 	dstNamespace := srcNamespace
 	if len(verifier.nsMap) != 0 {
@@ -126,18 +129,18 @@ func (verifier *Verifier) insertCollectionVerificationTask(
 }
 
 func (verifier *Verifier) InsertCollectionVerificationTask(
-	ctx context.Context,
+	ctx mongo.SessionContext,
 	srcNamespace string) (*VerificationTask, error) {
 	return verifier.insertCollectionVerificationTask(ctx, srcNamespace, verifier.generation)
 }
 
 func (verifier *Verifier) InsertFailedCollectionVerificationTask(
-	ctx context.Context,
+	ctx mongo.SessionContext,
 	srcNamespace string) (*VerificationTask, error) {
 	return verifier.insertCollectionVerificationTask(ctx, srcNamespace, verifier.generation+1)
 }
 
-func (verifier *Verifier) InsertPartitionVerificationTask(ctx context.Context, partition *partitions.Partition, shardKeys []string,
+func (verifier *Verifier) InsertPartitionVerificationTask(ctx mongo.SessionContext, partition *partitions.Partition, shardKeys []string,
 	dstNamespace string) (*VerificationTask, error) {
 	srcNamespace := strings.Join([]string{partition.Ns.DB, partition.Ns.Coll}, ".")
 	verificationTask := VerificationTask{
@@ -156,7 +159,7 @@ func (verifier *Verifier) InsertPartitionVerificationTask(ctx context.Context, p
 	return &verificationTask, err
 }
 
-func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx context.Context, ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
+func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx mongo.SessionContext, ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
 	dstNamespace := srcNamespace
 	if len(verifier.nsMap) != 0 {
 		var ok bool
@@ -183,7 +186,7 @@ func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx context.Context, i
 	return err
 }
 
-func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx context.Context) (*VerificationTask, error) {
+func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx mongo.SessionContext) (*VerificationTask, error) {
 	var verificationTask = VerificationTask{}
 	filter := bson.M{
 		"$and": bson.A{
@@ -215,7 +218,7 @@ func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx context.Context) (*Ver
 	return &verificationTask, err
 }
 
-func (verifier *Verifier) UpdateVerificationTask(ctx context.Context, task *VerificationTask) error {
+func (verifier *Verifier) UpdateVerificationTask(ctx mongo.SessionContext, task *VerificationTask) error {
 	updateFields := bson.M{
 		"$set": bson.M{
 			"status":                 task.Status,
@@ -236,7 +239,7 @@ func (verifier *Verifier) UpdateVerificationTask(ctx context.Context, task *Veri
 	return err
 }
 
-func (verifier *Verifier) CheckIsPrimary(ctx context.Context) (bool, error) {
+func (verifier *Verifier) CheckIsPrimary(ctx mongo.SessionContext) (bool, error) {
 	ownerSetId := primitive.NewObjectID()
 	filter := bson.M{"type": verificationTaskPrimary}
 	opts := options.Update()
@@ -257,7 +260,7 @@ func (verifier *Verifier) CheckIsPrimary(ctx context.Context) (bool, error) {
 	return isPrimary, nil
 }
 
-func (verifier *Verifier) UpdatePrimaryTaskComplete(ctx context.Context) error {
+func (verifier *Verifier) UpdatePrimaryTaskComplete(ctx mongo.SessionContext) error {
 	updateFields := bson.M{
 		"$set": bson.M{
 			"status": verificationTaskCompleted,

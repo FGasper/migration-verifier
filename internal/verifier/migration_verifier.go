@@ -632,7 +632,12 @@ func (verifier *Verifier) compareOneDocument(srcClientDoc, dstClientDoc bson.Raw
 	}}, nil
 }
 
-func (verifier *Verifier) ProcessVerifyTask(ctx context.Context, workerNum int, task *VerificationTask) {
+func (verifier *Verifier) ProcessVerifyTask(
+	ctx context.Context,
+	metaCtx mongo.SessionContext,
+	workerNum int,
+	task *VerificationTask,
+) {
 	verifier.logger.Debug().Msgf("[Worker %d] Processing verify task", workerNum)
 
 	problems, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(ctx, task)
@@ -690,7 +695,7 @@ func (verifier *Verifier) ProcessVerifyTask(ctx context.Context, workerNum int, 
 		}
 	}
 
-	err = verifier.UpdateVerificationTask(ctx, task)
+	err = verifier.UpdateVerificationTask(metaCtx, task)
 	if err != nil {
 		verifier.logger.Error().Msgf("Failed updating verification status: %v", err)
 	}
@@ -967,11 +972,11 @@ func nilableToString[T any](ptr *T) string {
 	return fmt.Sprintf("%v", *ptr)
 }
 
-func (verifier *Verifier) ProcessCollectionVerificationTask(ctx context.Context, workerNum int, task *VerificationTask) {
+func (verifier *Verifier) ProcessCollectionVerificationTask(ctx context.Context, metaCtx mongo.SessionContext, workerNum int, task *VerificationTask) {
 	verifier.logger.Debug().Msgf("[Worker %d] Processing collection", workerNum)
 
-	verifier.verifyMetadataAndPartitionCollection(ctx, workerNum, task)
-	err := verifier.UpdateVerificationTask(ctx, task)
+	verifier.verifyMetadataAndPartitionCollection(ctx, metaCtx, workerNum, task)
+	err := verifier.UpdateVerificationTask(metaCtx, task)
 
 	if err != nil {
 		verifier.logger.Fatal().Err(err).
@@ -1040,7 +1045,7 @@ func verifyIndexes(ctx context.Context, _ int, _ *VerificationTask, srcColl, dst
 	return results, nil
 }
 
-func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Context, workerNum int, task *VerificationTask) {
+func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Context, metaSess mongo.Session, workerNum int, task *VerificationTask) {
 	srcColl := verifier.srcClientCollection(task)
 	dstColl := verifier.dstClientCollection(task)
 	srcNs := FullName(srcColl)
@@ -1060,8 +1065,10 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 		return
 	}
 
+	metadataCtx := mongo.NewSessionContext(ctx, metaSess)
+
 	insertFailedCollection := func() {
-		_, err := verifier.InsertFailedCollectionVerificationTask(ctx, srcNs)
+		_, err := verifier.InsertFailedCollectionVerificationTask(metadataCtx, srcNs)
 		if err != nil {
 			verifier.
 				logger.
@@ -1129,7 +1136,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 	task.SourceByteCount = bytesCount
 
 	for _, partition := range partitions {
-		_, err := verifier.InsertPartitionVerificationTask(ctx, partition, shardKeys, dstNs)
+		_, err := verifier.InsertPartitionVerificationTask(metadataCtx, partition, shardKeys, dstNs)
 		if err != nil {
 			task.Status = verificationTaskFailed
 			verifier.logger.Error().Msgf("[Worker %d] Error inserting verifier tasks: %+v", workerNum, err)

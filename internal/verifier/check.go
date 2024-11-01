@@ -229,6 +229,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 		}
 		verifier.generation++
 		verifier.phase = Recheck
+
 		err = verifier.GenerateRecheckTasks(ctx)
 		if err != nil {
 			verifier.mux.Unlock()
@@ -292,8 +293,8 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 
 	err := verifier.doInMetaTransaction(
 		ctx,
-		func(sctx mongo.SessionContext) error {
-			isPrimary, err := verifier.CheckIsPrimary(ctx)
+		func(ctx context.Context, metaCtx mongo.SessionContext) error {
+			isPrimary, err := verifier.CheckIsPrimary(metaCtx)
 			if err != nil {
 				return err
 			}
@@ -308,7 +309,7 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 				}
 			}
 			for _, src := range verifier.srcNamespaces {
-				_, err := verifier.InsertCollectionVerificationTask(ctx, src)
+				_, err := verifier.InsertCollectionVerificationTask(metaCtx, src)
 				if err != nil {
 					return errors.Wrap(err, "failed to insert collection verification task")
 				}
@@ -316,7 +317,7 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 
 			verifier.gen0PendingCollectionTasks.Store(int32(len(verifier.srcNamespaces)))
 
-			err = verifier.UpdatePrimaryTaskComplete(ctx)
+			err = verifier.UpdatePrimaryTaskComplete(metaCtx)
 			if err != nil {
 				return errors.Wrap(err, "failed to set primary task to complete")
 			}
@@ -368,12 +369,12 @@ func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.Wait
 		default:
 			err := verifier.doInMetaTransaction(
 				ctx,
-				func(sctx mongo.SessionContext) error {
-					return verifier.workInTransaction(sctx, workerNum)
+				func(ctx context.Context, metaCtx mongo.SessionContext) error {
+					return verifier.workInTransaction(ctx, metaCtx, workerNum)
 				},
 			)
 
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				verifier.logger.Fatal().Err(err).Send()
 			}
 		}
@@ -382,7 +383,7 @@ func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.Wait
 
 func (verifier *Verifier) doInMetaTransaction(
 	ctx context.Context,
-	todo func(sctx mongo.SessionContext) error,
+	todo func(ctx context.Context, metaCtx mongo.SessionContext) error,
 ) error {
 	session, err := verifier.metaClient.StartSession()
 	if err != nil {
@@ -392,7 +393,7 @@ func (verifier *Verifier) doInMetaTransaction(
 	defer session.EndSession(ctx)
 
 	_, err = session.WithTransaction(ctx, func(sctx mongo.SessionContext) (any, error) {
-		return nil, todo(sctx)
+		return nil, todo(ctx, sctx)
 	})
 
 	return err
@@ -400,9 +401,10 @@ func (verifier *Verifier) doInMetaTransaction(
 
 func (verifier *Verifier) workInTransaction(
 	ctx context.Context,
+	metaCtx mongo.SessionContext,
 	workerNum int,
 ) error {
-	task, err := verifier.FindNextVerifyTaskAndUpdate(ctx)
+	task, err := verifier.FindNextVerifyTaskAndUpdate(metaCtx)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		verifier.logger.Debug().Msgf("[Worker %d] No tasks found, sleeping...", workerNum)
 		time.Sleep(verifier.workerSleepDelayMillis * time.Millisecond)
@@ -412,7 +414,7 @@ func (verifier *Verifier) workInTransaction(
 	}
 
 	if task.Type == verificationTaskVerifyCollection {
-		verifier.ProcessCollectionVerificationTask(ctx, workerNum, task)
+		verifier.ProcessCollectionVerificationTask(ctx, metaCtx, workerNum, task)
 		if task.Generation == 0 {
 			newVal := verifier.gen0PendingCollectionTasks.Add(-1)
 			if newVal == 0 {
@@ -420,7 +422,7 @@ func (verifier *Verifier) workInTransaction(
 			}
 		}
 	} else {
-		verifier.ProcessVerifyTask(ctx, workerNum, task)
+		verifier.ProcessVerifyTask(ctx, metaCtx, workerNum, task)
 	}
 
 	return nil

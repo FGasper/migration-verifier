@@ -125,46 +125,70 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 
 	verifier.logger.Debug().Msgf("Creating recheck tasks from generation %d’s %s documents", prevGeneration, recheckQueue)
 
-	// We generate one recheck task per collection, unless
-	// 1) The size of the list of IDs would exceed 12MB (a very conservative way of avoiding
-	//    the 16MB BSON limit)
-	// 2) The size of the data would exceed our desired partition size.  This limits memory use
-	//    during the recheck phase.
-	prevDBName, prevCollName := "", ""
-	var idAccum []interface{}
-	var idLenAccum int
-	var dataSizeAccum int64
-	const maxIdsSize = 12 * 1024 * 1024
-	cursor, err := verifier.verificationDatabase().Collection(recheckQueue).Find(
-		ctx, bson.D{{"_id.generation", prevGeneration}}, options.Find().SetSort(bson.D{{"_id", 1}}))
-	if err != nil {
-		return err
-	}
-	defer cursor.Close(ctx)
-	// We group these here using a sort rather than using aggregate because aggregate is
-	// subject to a 16MB limit on group size.
-	for cursor.Next(ctx) {
-		err := cursor.Err()
-		if err != nil {
-			return err
-		}
-		var doc RecheckDoc
-		err = cursor.Decode(&doc)
-		if err != nil {
-			return err
-		}
-		idRaw := cursor.Current.Lookup("_id", "docID")
-		idLen := len(idRaw.Value)
+	return verifier.doInMetaTransaction(
+		ctx,
+		func(_ context.Context, metaCtx mongo.SessionContext) error {
+			// We generate one recheck task per collection, unless
+			// 1) The size of the list of IDs would exceed 12MB (a very conservative way of avoiding
+			//    the 16MB BSON limit)
+			// 2) The size of the data would exceed our desired partition size.  This limits memory use
+			//    during the recheck phase.
+			prevDBName, prevCollName := "", ""
+			var idAccum []interface{}
+			var idLenAccum int
+			var dataSizeAccum int64
+			const maxIdsSize = 12 * 1024 * 1024
+			cursor, err := verifier.verificationDatabase().Collection(recheckQueue).Find(
+				ctx, bson.D{{"_id.generation", prevGeneration}}, options.Find().SetSort(bson.D{{"_id", 1}}))
+			if err != nil {
+				return err
+			}
+			defer cursor.Close(ctx)
+			// We group these here using a sort rather than using aggregate because aggregate is
+			// subject to a 16MB limit on group size.
+			for cursor.Next(ctx) {
+				err := cursor.Err()
+				if err != nil {
+					return err
+				}
+				var doc RecheckDoc
+				err = cursor.Decode(&doc)
+				if err != nil {
+					return err
+				}
+				idRaw := cursor.Current.Lookup("_id", "docID")
+				idLen := len(idRaw.Value)
 
-		verifier.logger.Debug().Msgf("Found persisted recheck doc for %s.%s", doc.PrimaryKey.DatabaseName, doc.PrimaryKey.CollectionName)
+				verifier.logger.Debug().Msgf("Found persisted recheck doc for %s.%s", doc.PrimaryKey.DatabaseName, doc.PrimaryKey.CollectionName)
 
-		if doc.PrimaryKey.DatabaseName != prevDBName ||
-			doc.PrimaryKey.CollectionName != prevCollName ||
-			idLenAccum >= maxIdsSize ||
-			dataSizeAccum >= verifier.partitionSizeInBytes {
-			namespace := prevDBName + "." + prevCollName
+				if doc.PrimaryKey.DatabaseName != prevDBName ||
+					doc.PrimaryKey.CollectionName != prevCollName ||
+					idLenAccum >= maxIdsSize ||
+					dataSizeAccum >= verifier.partitionSizeInBytes {
+					namespace := prevDBName + "." + prevCollName
+					if len(idAccum) > 0 {
+						err := verifier.InsertFailedIdsVerificationTask(metaCtx, idAccum, types.ByteCount(dataSizeAccum), namespace)
+						if err != nil {
+							return err
+						}
+						verifier.logger.Debug().Msgf(
+							"Created ID verification task for namespace %s with %d ids, "+
+								"%d id bytes and %d data bytes",
+							namespace, len(idAccum), idLenAccum, dataSizeAccum)
+					}
+					prevDBName = doc.PrimaryKey.DatabaseName
+					prevCollName = doc.PrimaryKey.CollectionName
+					idLenAccum = 0
+					dataSizeAccum = 0
+					idAccum = []interface{}{}
+				}
+				idLenAccum += idLen
+				dataSizeAccum += int64(doc.DataSize)
+				idAccum = append(idAccum, doc.PrimaryKey.DocumentID)
+			}
 			if len(idAccum) > 0 {
-				err := verifier.InsertFailedIdsVerificationTask(ctx, idAccum, types.ByteCount(dataSizeAccum), namespace)
+				namespace := prevDBName + "." + prevCollName
+				err := verifier.InsertFailedIdsVerificationTask(metaCtx, idAccum, types.ByteCount(dataSizeAccum), namespace)
 				if err != nil {
 					return err
 				}
@@ -173,26 +197,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 						"%d id bytes and %d data bytes",
 					namespace, len(idAccum), idLenAccum, dataSizeAccum)
 			}
-			prevDBName = doc.PrimaryKey.DatabaseName
-			prevCollName = doc.PrimaryKey.CollectionName
-			idLenAccum = 0
-			dataSizeAccum = 0
-			idAccum = []interface{}{}
-		}
-		idLenAccum += idLen
-		dataSizeAccum += int64(doc.DataSize)
-		idAccum = append(idAccum, doc.PrimaryKey.DocumentID)
-	}
-	if len(idAccum) > 0 {
-		namespace := prevDBName + "." + prevCollName
-		err := verifier.InsertFailedIdsVerificationTask(ctx, idAccum, types.ByteCount(dataSizeAccum), namespace)
-		if err != nil {
-			return err
-		}
-		verifier.logger.Debug().Msgf(
-			"Created ID verification task for namespace %s with %d ids, "+
-				"%d id bytes and %d data bytes",
-			namespace, len(idAccum), idLenAccum, dataSizeAccum)
-	}
-	return nil
+			return nil
+		},
+	)
 }
