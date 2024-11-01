@@ -289,34 +289,42 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 			return err
 		}
 	}
-	isPrimary, err := verifier.CheckIsPrimary(ctx)
-	if err != nil {
-		return err
-	}
-	if !isPrimary {
-		verifier.logger.Info().Msgf("Primary task already existed; skipping setup")
-		return nil
-	}
-	if verifier.verifyAll {
-		err := verifier.setupAllNamespaceList(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	for _, src := range verifier.srcNamespaces {
-		_, err := verifier.InsertCollectionVerificationTask(ctx, src)
-		if err != nil {
-			verifier.logger.Error().Msgf("Failed to insert collection verification task: %s", err)
-			return err
-		}
-	}
 
-	verifier.gen0PendingCollectionTasks.Store(int32(len(verifier.srcNamespaces)))
+	verifier.doInMetaTransaction(
+		ctx,
+		func(sctx mongo.SessionContext) error {
+			isPrimary, err := verifier.CheckIsPrimary(ctx)
+			if err != nil {
+				return err
+			}
+			if !isPrimary {
+				verifier.logger.Info().Msgf("Primary task already existed; skipping setup")
+				return nil
+			}
+			if verifier.verifyAll {
+				err := verifier.setupAllNamespaceList(ctx)
+				if err != nil {
+					return err
+				}
+			}
+			for _, src := range verifier.srcNamespaces {
+				_, err := verifier.InsertCollectionVerificationTask(ctx, src)
+				if err != nil {
+					return errors.Wrap(err, "failed to insert collection verification task")
+				}
+			}
 
-	err = verifier.UpdatePrimaryTaskComplete(ctx)
-	if err != nil {
-		return err
-	}
+			verifier.gen0PendingCollectionTasks.Store(int32(len(verifier.srcNamespaces)))
+
+			err = verifier.UpdatePrimaryTaskComplete(ctx)
+			if err != nil {
+				return errors.Wrap(err, "failed to set primary task to complete")
+			}
+
+			return nil
+		},
+	)
+
 	return nil
 }
 
@@ -354,17 +362,10 @@ func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.Wait
 		case <-ctx.Done():
 			return
 		default:
-			session, err := verifier.metaClient.StartSession()
-			if err != nil {
-				verifier.logger.Fatal().Err(err).Msg("failed to start session")
-			}
-
-			defer session.EndSession(ctx)
-
-			_, err = session.WithTransaction(
+			err := verifier.doInMetaTransaction(
 				ctx,
-				func(sctx mongo.SessionContext) (any, error) {
-					return nil, verifier.workInTransaction(sctx, workerNum)
+				func(sctx mongo.SessionContext) error {
+					return verifier.workInTransaction(sctx, workerNum)
 				},
 			)
 
@@ -373,6 +374,24 @@ func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.Wait
 			}
 		}
 	}
+}
+
+func (verifier *Verifier) doInMetaTransaction(
+	ctx context.Context,
+	todo func(sctx mongo.SessionContext) error,
+) error {
+	session, err := verifier.metaClient.StartSession()
+	if err != nil {
+		verifier.logger.Fatal().Err(err).Msg("failed to start session")
+	}
+
+	defer session.EndSession(ctx)
+
+	_, err = session.WithTransaction(ctx, func(sctx mongo.SessionContext) (any, error) {
+		return nil, todo(sctx)
+	})
+
+	return err
 }
 
 func (verifier *Verifier) workInTransaction(
