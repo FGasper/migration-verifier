@@ -151,6 +151,11 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 		return err
 	}
 
+	err = verifier.resetProcessingTasks(ctx)
+	if err != nil {
+		return errors.Wrapf(err, "failed to reset %#q tasks", string(verificationTaskProcessing))
+	}
+
 	verifier.logger.Debug().Msg("Starting Check")
 
 	verifier.phase = Check
@@ -404,7 +409,10 @@ func (verifier *Verifier) workInTransaction(
 	metaCtx mongo.SessionContext,
 	workerNum int,
 ) error {
-	task, err := verifier.FindNextVerifyTaskAndUpdate(metaCtx)
+	// This happens outside the transaction in order to make the task status
+	// globally visible. This is also why we have to reset status=processing
+	// tasks when/if the verifier restarts.
+	task, err := verifier.FindNextVerifyTaskAndUpdate(ctx)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		verifier.logger.Debug().Msgf("[Worker %d] No tasks found, sleeping...", workerNum)
 		time.Sleep(verifier.workerSleepDelayMillis * time.Millisecond)

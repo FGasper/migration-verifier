@@ -7,12 +7,14 @@ package verifier
 // a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/10gen/migration-verifier/internal/partitions"
 	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -44,8 +46,9 @@ const (
 	// The “workhorse” task type: verify a partition of documents.
 	verificationTaskVerifyDocuments verificationTaskType = "verify"
 
-	// A verifyCollection task verifies collection metadata
-	// and inserts verify-documents tasks to verify data ranges.
+	// A verifyCollection task verifies one collection's metadata
+	// and inserts verify-documents tasks to verify its data ranges.
+	// This includes sampling & partitioning the collection.
 	verificationTaskVerifyCollection verificationTaskType = "verifyCollection"
 
 	// The primary task creates a verifyCollection task for each
@@ -186,7 +189,43 @@ func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx mongo.SessionConte
 	return err
 }
 
-func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx mongo.SessionContext) (*VerificationTask, error) {
+func (v *Verifier) resetProcessingTasks(ctx context.Context) error {
+	coll := v.verificationTaskCollection()
+
+	result, err := coll.UpdateMany(
+		ctx,
+		bson.M{
+			"generation": v.generation,
+			"status":     verificationTaskProcessing,
+		},
+		bson.M{
+			"$set": bson.M{
+				"status": verificationTaskAdded,
+			},
+			"$unset": bson.M{
+				"begin_time": 1,
+			},
+		},
+	)
+
+	if err != nil {
+		return errors.Wrap(err, "failed to reset in-progress tasks")
+	}
+
+	if result.ModifiedCount > 0 {
+		v.logger.Info().
+			Int64("count", result.ModifiedCount).
+			Msg("Formerly in-progress task(s) found and reset.")
+	}
+
+	return nil
+}
+
+func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx context.Context) (*VerificationTask, error) {
+	if mongo.SessionFromContext(ctx) != nil {
+		panic("should be called from outside transaction")
+	}
+
 	var verificationTask = VerificationTask{}
 	filter := bson.M{
 		"$and": bson.A{
