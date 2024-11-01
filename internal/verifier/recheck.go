@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -92,35 +92,44 @@ func (verifier *Verifier) insertRecheckDocs(
 
 	generation, _ := verifier.getGenerationWhileLocked()
 
-	models := []mongo.WriteModel{}
-	for _, rSpec := range recheckSpecs {
-		pk := RecheckPrimaryKey{
-			Generation:     generation,
-			DatabaseName:   rSpec.dbName,
-			CollectionName: rSpec.collName,
-			DocumentID:     rSpec.docID,
-		}
+	// NB: This shouldn’t exceed 16 MiB since it will have come from a change
+	// event batch that would have fit into that limit.
+	updates := lo.Map(
+		recheckSpecs,
+		func(rSpec recheckSpec, _ int) bson.M {
+			pk := RecheckPrimaryKey{
+				Generation:     generation,
+				DatabaseName:   rSpec.dbName,
+				CollectionName: rSpec.collName,
+				DocumentID:     rSpec.docID,
+			}
 
-		// The filter must exclude DataSize; otherwise, if a failed comparison
-		// and a change event happen on the same document for the same
-		// generation, the 2nd insert will fail because a) its filter won’t
-		// match anything, and b) it’ll try to insert a new document with the
-		// same _id as the one that the 1st insert already created.
-		filterDoc := bson.D{{"_id", pk}}
+			recheckDoc := RecheckDoc{
+				PrimaryKey: pk,
+				DataSize:   rSpec.dataSize,
+			}
 
-		recheckDoc := RecheckDoc{
-			PrimaryKey: pk,
-			DataSize:   rSpec.dataSize,
-		}
+			return bson.M{
+				"q":      bson.M{"_id": pk},
+				"u":      recheckDoc,
+				"upsert": true,
+			}
+		},
+	)
 
-		models = append(models,
-			mongo.NewReplaceOneModel().
-				SetFilter(filterDoc).SetReplacement(recheckDoc).SetUpsert(true))
+	err := verifier.verificationDatabase().RunCommand(
+		ctx,
+		bson.D{
+			{"update", recheckQueue},
+			{"updates", updates},
+		},
+	).Err()
+
+	if err == nil {
+		verifier.logger.Debug().Msgf("Persisted %d recheck doc(s) for generation %d", len(recheckSpecs), generation)
 	}
-	_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(ctx, models)
-	verifier.logger.Debug().Msgf("Persisted %d recheck doc(s) for generation %d", len(models), generation)
 
-	return err
+	return errors.Wrapf(err, "failed to persist %d rechecks", len(recheckSpecs))
 }
 
 // ClearRecheckDocs deletes the previous generation’s recheck

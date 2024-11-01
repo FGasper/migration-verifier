@@ -78,6 +78,7 @@ type cursorLike interface {
 }
 
 func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
+	fmt.Printf("\n---------- exhausting change events (batch remaining=%d)\n", cursor.RemainingBatchLength())
 	for {
 		var obj T
 
@@ -95,6 +96,7 @@ func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
 			panic("should already be another document waiting")
 		}
 	}
+	fmt.Printf("\n---- done exhausting\n")
 
 	return nil
 }
@@ -102,7 +104,6 @@ func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
 // StartChangeStream starts the change stream.
 func (verifier *Verifier) StartChangeStream(ctx context.Context, startTime *primitive.Timestamp) error {
 	streamReader := func(cs *mongo.ChangeStream) {
-		var changeEvent ParsedEvent
 		for {
 			select {
 			// if the context is cancelled return immmediately
@@ -116,13 +117,13 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context, startTime *prim
 					events := []ParsedEvent{}
 					err := exhaustCursorBatch(cs, &events)
 					if err != nil {
-						verifier.logger.Fatal().Err(err).Msg("Failed to read change events")
+						verifier.logger.Fatal().Err(err).Msg("Failed to read change events.")
 					}
 
 					err = verifier.HandleChangeStreamEvents(ctx, events)
 					if err != nil {
 						verifier.changeStreamErrChan <- err
-						verifier.logger.Fatal().Err(err).Msg("Error handling change event")
+						verifier.logger.Fatal().Err(err).Msg("Failed to handle change events.")
 					}
 				}
 				verifier.mux.Lock()
@@ -143,10 +144,14 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context, startTime *prim
 				if next := cs.TryNext(ctx); !next {
 					continue
 				}
-				if err := cs.Decode(&changeEvent); err != nil {
-					verifier.logger.Fatal().Err(err).Msg("")
+
+				events := []ParsedEvent{}
+				err := exhaustCursorBatch(cs, &events)
+				if err != nil {
+					verifier.logger.Fatal().Err(err).Msg("Failed to read change events.")
 				}
-				err := verifier.HandleChangeStreamEvent(ctx, &changeEvent)
+
+				err = verifier.HandleChangeStreamEvents(ctx, events)
 				if err != nil {
 					verifier.changeStreamErrChan <- err
 					return
