@@ -117,6 +117,10 @@ func (verifier *Verifier) insertRecheckDocs(
 		},
 	)
 
+	// A single update command should outperform separate
+	// updates for each recheck--even if done with BulkWrite.
+	// Unfortunately, the driver doesn’t expose a bulk-replace
+	// command, so we have to do it via RunCommand.
 	err := verifier.verificationDatabase().RunCommand(
 		ctx,
 		bson.D{
