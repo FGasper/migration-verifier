@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -50,7 +51,7 @@ func (suite *MultiMetaVersionTestSuite) TestFailedCompareThenReplace() {
 	}
 
 	suite.Require().NoError(
-		verifier.InsertChangeEventRecheckDoc(ctx, &event),
+		verifier.InsertChangeEventRecheckDocs(ctx, []ParsedEvent{event}),
 		"insert change event recheck",
 	)
 
@@ -95,7 +96,20 @@ func (suite *MultiMetaVersionTestSuite) TestLargeIDInsertions() {
 	id3 := strings.Repeat("c", overlyLarge)
 	ids := []interface{}{id1, id2, id3}
 	dataSizes := []int{overlyLarge, overlyLarge, overlyLarge}
-	err := verifier.insertRecheckDocs(ctx, "testDB", "testColl", ids, dataSizes)
+	err := verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB",
+					collName: "testColl",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 
 	d1 := RecheckDoc{
@@ -156,7 +170,20 @@ func (suite *MultiMetaVersionTestSuite) TestLargeDataInsertions() {
 	id3 := "c"
 	ids := []interface{}{id1, id2, id3}
 	dataSizes := []int{400 * 1024, 700 * 1024, 1024}
-	err := verifier.insertRecheckDocs(ctx, "testDB", "testColl", ids, dataSizes)
+	err := verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB",
+					collName: "testColl",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 	d1 := RecheckDoc{
 		PrimaryKey: RecheckPrimaryKey{
@@ -217,13 +244,65 @@ func (suite *MultiMetaVersionTestSuite) TestMultipleNamespaces() {
 	id3 := "c"
 	ids := []interface{}{id1, id2, id3}
 	dataSizes := []int{1000, 1000, 1000}
-	err := verifier.insertRecheckDocs(ctx, "testDB1", "testColl1", ids, dataSizes)
+	err := verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB1",
+					collName: "testColl1",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
-	err = verifier.insertRecheckDocs(ctx, "testDB1", "testColl2", ids, dataSizes)
+	err = verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB1",
+					collName: "testColl2",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
-	err = verifier.insertRecheckDocs(ctx, "testDB2", "testColl1", ids, dataSizes)
+	err = verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB2",
+					collName: "testColl1",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
-	err = verifier.insertRecheckDocs(ctx, "testDB2", "testColl2", ids, dataSizes)
+	err = verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB2",
+					collName: "testColl2",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 
 	verifier.generation++
@@ -267,17 +346,56 @@ func (suite *MultiMetaVersionTestSuite) TestGenerationalClear() {
 	id2 := "b"
 	ids := []interface{}{id1, id2}
 	dataSizes := []int{1000, 1000}
-	err := verifier.insertRecheckDocs(ctx, "testDB", "testColl", ids, dataSizes)
+	err := verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB",
+					collName: "testColl",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 
 	verifier.generation++
 
-	err = verifier.insertRecheckDocs(ctx, "testDB", "testColl", ids, dataSizes)
+	err = verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB",
+					collName: "testColl",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 
 	verifier.generation++
 
-	err = verifier.insertRecheckDocs(ctx, "testDB", "testColl", ids, dataSizes)
+	err = verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			ids,
+			func(id any, i int) recheckSpec {
+				return recheckSpec{
+					dbName:   "testDB",
+					collName: "testColl",
+					docID:    id,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 	suite.Require().NoError(err)
 
 	d1 := RecheckDoc{

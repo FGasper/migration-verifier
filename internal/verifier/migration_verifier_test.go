@@ -232,29 +232,33 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Recheck() {
 	verifier := buildVerifier(suite.T(), suite.srcMongoInstance, suite.dstMongoInstance, suite.metaMongoInstance)
 
 	suite.Require().NoError(
-		verifier.InsertChangeEventRecheckDoc(
+		verifier.InsertChangeEventRecheckDocs(
 			ctx,
-			&ParsedEvent{
-				OpType: "insert",
-				Ns:     &Namespace{DB: "mydb", Coll: "coll2"},
-				DocKey: DocKey{
-					ID: "heyhey",
+			[]ParsedEvent{
+				{
+					OpType: "insert",
+					Ns:     &Namespace{DB: "mydb", Coll: "coll2"},
+					DocKey: DocKey{
+						ID: "heyhey",
+					},
 				},
 			},
 		),
 	)
 
 	suite.Require().NoError(
-		verifier.InsertChangeEventRecheckDoc(
+		verifier.InsertChangeEventRecheckDocs(
 			ctx,
-			&ParsedEvent{
-				ID: bson.M{
-					"docID": "ID/docID",
-				},
-				OpType: "insert",
-				Ns:     &Namespace{DB: "mydb", Coll: "coll1"},
-				DocKey: DocKey{
-					ID: "hoohoo",
+			[]ParsedEvent{
+				{
+					ID: bson.M{
+						"docID": "ID/docID",
+					},
+					OpType: "insert",
+					Ns:     &Namespace{DB: "mydb", Coll: "coll1"},
+					DocKey: DocKey{
+						ID: "hoohoo",
+					},
 				},
 			},
 		),
@@ -497,19 +501,19 @@ func (suite *MultiMetaVersionTestSuite) TestFailedVerificationTaskInsertions() {
 			Coll: "bar2",
 		},
 	}
-	err = verifier.HandleChangeStreamEvent(ctx, &event)
+	err = verifier.HandleChangeStreamEvents(ctx, []ParsedEvent{event})
 	suite.Require().NoError(err)
 	event.OpType = "insert"
-	err = verifier.HandleChangeStreamEvent(ctx, &event)
+	err = verifier.HandleChangeStreamEvents(ctx, []ParsedEvent{event})
 	suite.Require().NoError(err)
 	event.OpType = "replace"
-	err = verifier.HandleChangeStreamEvent(ctx, &event)
+	err = verifier.HandleChangeStreamEvents(ctx, []ParsedEvent{event})
 	suite.Require().NoError(err)
 	event.OpType = "update"
-	err = verifier.HandleChangeStreamEvent(ctx, &event)
+	err = verifier.HandleChangeStreamEvents(ctx, []ParsedEvent{event})
 	suite.Require().NoError(err)
 	event.OpType = "flibbity"
-	err = verifier.HandleChangeStreamEvent(ctx, &event)
+	err = verifier.HandleChangeStreamEvents(ctx, []ParsedEvent{event})
 	suite.Require().Equal(fmt.Errorf(`Not supporting: "flibbity" events`), err)
 
 	verifier.generation++
