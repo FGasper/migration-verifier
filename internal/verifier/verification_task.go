@@ -183,39 +183,6 @@ func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx context.Context, i
 	return err
 }
 
-/*
-func (v *Verifier) resetInProgressTasks(ctx context.Context) error {
-	coll := v.verificationTaskCollection()
-
-	result, err := coll.UpdateMany(
-		ctx,
-		bson.M{
-			"generation": v.generation,
-			"status":     verificationTaskProcessing,
-		},
-		bson.M{
-			"$set": bson.M{
-				"status": verificationTaskAdded,
-			},
-			"$unset": bson.M{
-				"begin_time": 1,
-			},
-		},
-	)
-
-	if err != nil {
-		return errors.Wrap(err, "failed to reset in-progress tasks")
-	}
-
-	if result.ModifiedCount > 0 {
-		v.logger.Info().
-			Int64("count", result.ModifiedCount).
-			Msg("Formerly in-progress task(s) found and reset.")
-	}
-
-	return nil
-}*/
-
 func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx context.Context) (*VerificationTask, error) {
 	var verificationTask = VerificationTask{}
 	filter := bson.M{
