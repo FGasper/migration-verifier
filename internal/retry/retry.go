@@ -59,12 +59,13 @@ func (r *Retryer) RunForUUIDAndTransientErrors(
 //
 // RunForUUIDErrorOnly returns the collection's current name in all cases.
 func (r *Retryer) RunForUUIDErrorOnly(
+	ctx context.Context,
 	logger *logger.Logger, expectedCollName string, f func(*Info, string) error,
 ) (string, error) {
 	// Since we're not actually sleeping when checking for UUID/name mismatch
 	// errors, we don't need to provide a real context to handle
 	// cancellations.
-	return r.runRetryLoop(context.Background(), logger, expectedCollName, f, false, true)
+	return r.runRetryLoop(ctx, logger, expectedCollName, f, false, true)
 }
 
 // RunForTransientErrorsOnly retries f() for transient errors only, and

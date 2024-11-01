@@ -90,6 +90,7 @@ type VerificationRange struct {
 }
 
 func (verifier *Verifier) insertCollectionVerificationTask(
+	ctx context.Context,
 	srcNamespace string,
 	generation int) (*VerificationTask, error) {
 
@@ -120,21 +121,23 @@ func (verifier *Verifier) insertCollectionVerificationTask(
 			To:        dstNamespace,
 		},
 	}
-	_, err := verifier.verificationTaskCollection().InsertOne(context.Background(), verificationTask)
+	_, err := verifier.verificationTaskCollection().InsertOne(ctx, verificationTask)
 	return &verificationTask, err
 }
 
 func (verifier *Verifier) InsertCollectionVerificationTask(
+	ctx context.Context,
 	srcNamespace string) (*VerificationTask, error) {
-	return verifier.insertCollectionVerificationTask(srcNamespace, verifier.generation)
+	return verifier.insertCollectionVerificationTask(ctx, srcNamespace, verifier.generation)
 }
 
 func (verifier *Verifier) InsertFailedCollectionVerificationTask(
+	ctx context.Context,
 	srcNamespace string) (*VerificationTask, error) {
-	return verifier.insertCollectionVerificationTask(srcNamespace, verifier.generation+1)
+	return verifier.insertCollectionVerificationTask(ctx, srcNamespace, verifier.generation+1)
 }
 
-func (verifier *Verifier) InsertPartitionVerificationTask(partition *partitions.Partition, shardKeys []string,
+func (verifier *Verifier) InsertPartitionVerificationTask(ctx context.Context, partition *partitions.Partition, shardKeys []string,
 	dstNamespace string) (*VerificationTask, error) {
 	srcNamespace := strings.Join([]string{partition.Ns.DB, partition.Ns.Coll}, ".")
 	verificationTask := VerificationTask{
@@ -149,11 +152,11 @@ func (verifier *Verifier) InsertPartitionVerificationTask(partition *partitions.
 			To:        dstNamespace,
 		},
 	}
-	_, err := verifier.verificationTaskCollection().InsertOne(context.Background(), verificationTask)
+	_, err := verifier.verificationTaskCollection().InsertOne(ctx, verificationTask)
 	return &verificationTask, err
 }
 
-func (verifier *Verifier) InsertFailedIdsVerificationTask(ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
+func (verifier *Verifier) InsertFailedIdsVerificationTask(ctx context.Context, ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
 	dstNamespace := srcNamespace
 	if len(verifier.nsMap) != 0 {
 		var ok bool
@@ -176,12 +179,44 @@ func (verifier *Verifier) InsertFailedIdsVerificationTask(ids []interface{}, dat
 		SourceDocumentCount: types.DocumentCount(len(ids)),
 		SourceByteCount:     dataSize,
 	}
-	var ctx = context.Background()
 	_, err := verifier.verificationTaskCollection().InsertOne(ctx, &verificationTask)
 	return err
 }
 
-func (verifier *Verifier) FindNextVerifyTaskAndUpdate() (*VerificationTask, error) {
+/*
+func (v *Verifier) resetInProgressTasks(ctx context.Context) error {
+	coll := v.verificationTaskCollection()
+
+	result, err := coll.UpdateMany(
+		ctx,
+		bson.M{
+			"generation": v.generation,
+			"status":     verificationTaskProcessing,
+		},
+		bson.M{
+			"$set": bson.M{
+				"status": verificationTaskAdded,
+			},
+			"$unset": bson.M{
+				"begin_time": 1,
+			},
+		},
+	)
+
+	if err != nil {
+		return errors.Wrap(err, "failed to reset in-progress tasks")
+	}
+
+	if result.ModifiedCount > 0 {
+		v.logger.Info().
+			Int64("count", result.ModifiedCount).
+			Msg("Formerly in-progress task(s) found and reset.")
+	}
+
+	return nil
+}*/
+
+func (verifier *Verifier) FindNextVerifyTaskAndUpdate(ctx context.Context) (*VerificationTask, error) {
 	var verificationTask = VerificationTask{}
 	filter := bson.M{
 		"$and": bson.A{
@@ -209,12 +244,11 @@ func (verifier *Verifier) FindNextVerifyTaskAndUpdate() (*VerificationTask, erro
 	// We want “verifyCollection” tasks before “verify”(-document) ones.
 	opts.SetSort(bson.M{"type": -1})
 
-	err := coll.FindOneAndUpdate(context.Background(), filter, updates, opts).Decode(&verificationTask)
+	err := coll.FindOneAndUpdate(ctx, filter, updates, opts).Decode(&verificationTask)
 	return &verificationTask, err
 }
 
-func (verifier *Verifier) UpdateVerificationTask(task *VerificationTask) error {
-	var ctx = context.Background()
+func (verifier *Verifier) UpdateVerificationTask(ctx context.Context, task *VerificationTask) error {
 	updateFields := bson.M{
 		"$set": bson.M{
 			"status":                 task.Status,
@@ -235,7 +269,7 @@ func (verifier *Verifier) UpdateVerificationTask(task *VerificationTask) error {
 	return err
 }
 
-func (verifier *Verifier) CheckIsPrimary() (bool, error) {
+func (verifier *Verifier) CheckIsPrimary(ctx context.Context) (bool, error) {
 	ownerSetId := primitive.NewObjectID()
 	filter := bson.M{"type": verificationTaskPrimary}
 	opts := options.Update()
@@ -247,7 +281,7 @@ func (verifier *Verifier) CheckIsPrimary() (bool, error) {
 			"status": verificationTaskAdded,
 		},
 	}
-	result, err := verifier.verificationTaskCollection().UpdateOne(context.Background(), filter, update, opts)
+	result, err := verifier.verificationTaskCollection().UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		return false, err
 	}
@@ -256,8 +290,7 @@ func (verifier *Verifier) CheckIsPrimary() (bool, error) {
 	return isPrimary, nil
 }
 
-func (verifier *Verifier) UpdatePrimaryTaskComplete() error {
-	var ctx = context.Background()
+func (verifier *Verifier) UpdatePrimaryTaskComplete(ctx context.Context) error {
 	updateFields := bson.M{
 		"$set": bson.M{
 			"status": verificationTaskCompleted,

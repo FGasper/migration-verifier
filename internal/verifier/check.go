@@ -96,7 +96,7 @@ func (verifier *Verifier) CheckWorker(ctx context.Context) error {
 		default:
 		}
 
-		verificationStatus, err := verifier.GetVerificationStatus()
+		verificationStatus, err := verifier.GetVerificationStatus(ctx)
 		if err != nil {
 			verifier.logger.Error().Msgf("Failed getting verification status: %v", err)
 		}
@@ -150,6 +150,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 	if err != nil {
 		return err
 	}
+
 	verifier.logger.Debug().Msg("Starting Check")
 
 	verifier.phase = Check
@@ -176,14 +177,14 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 		}
 	}
 	// Log out the verification status when initially booting up so it's easy to see the current state
-	verificationStatus, err := verifier.GetVerificationStatus()
+	verificationStatus, err := verifier.GetVerificationStatus(ctx)
 	if err != nil {
 		verifier.logger.Error().Msgf("Failed getting verification status: %v", err)
 	} else {
 		verifier.logger.Debug().Msgf("Initial verification phase: %+v", verificationStatus)
 	}
 
-	err = verifier.CreateInitialTasks()
+	err = verifier.CreateInitialTasks(ctx)
 	if err != nil {
 		return err
 	}
@@ -273,7 +274,7 @@ func (verifier *Verifier) setupAllNamespaceList(ctx context.Context) error {
 	return nil
 }
 
-func (verifier *Verifier) CreateInitialTasks() error {
+func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 	// If we don't know the src namespaces, we're definitely not the primary task.
 	if !verifier.verifyAll {
 		if len(verifier.srcNamespaces) == 0 {
@@ -288,7 +289,7 @@ func (verifier *Verifier) CreateInitialTasks() error {
 			return err
 		}
 	}
-	isPrimary, err := verifier.CheckIsPrimary()
+	isPrimary, err := verifier.CheckIsPrimary(ctx)
 	if err != nil {
 		return err
 	}
@@ -297,13 +298,13 @@ func (verifier *Verifier) CreateInitialTasks() error {
 		return nil
 	}
 	if verifier.verifyAll {
-		err := verifier.setupAllNamespaceList(context.Background())
+		err := verifier.setupAllNamespaceList(ctx)
 		if err != nil {
 			return err
 		}
 	}
 	for _, src := range verifier.srcNamespaces {
-		_, err := verifier.InsertCollectionVerificationTask(src)
+		_, err := verifier.InsertCollectionVerificationTask(ctx, src)
 		if err != nil {
 			verifier.logger.Error().Msgf("Failed to insert collection verification task: %s", err)
 			return err
@@ -312,7 +313,7 @@ func (verifier *Verifier) CreateInitialTasks() error {
 
 	verifier.gen0PendingCollectionTasks.Store(int32(len(verifier.srcNamespaces)))
 
-	err = verifier.UpdatePrimaryTaskComplete()
+	err = verifier.UpdatePrimaryTaskComplete(ctx)
 	if err != nil {
 		return err
 	}
@@ -353,26 +354,51 @@ func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.Wait
 		case <-ctx.Done():
 			return
 		default:
-			task, err := verifier.FindNextVerifyTaskAndUpdate()
-			if errors.Is(err, mongo.ErrNoDocuments) {
-				verifier.logger.Debug().Msgf("[Worker %d] No tasks found, sleeping...", workerNum)
-				time.Sleep(verifier.workerSleepDelayMillis * time.Millisecond)
-				continue
-			} else if err != nil {
-				panic(err)
+			session, err := verifier.metaClient.StartSession()
+			if err != nil {
+				verifier.logger.Fatal().Err(err).Msg("failed to start session")
 			}
 
-			if task.Type == verificationTaskVerifyCollection {
-				verifier.ProcessCollectionVerificationTask(ctx, workerNum, task)
-				if task.Generation == 0 {
-					newVal := verifier.gen0PendingCollectionTasks.Add(-1)
-					if newVal == 0 {
-						verifier.PrintVerificationSummary(ctx, Gen0MetadataAnalysisComplete)
-					}
-				}
-			} else {
-				verifier.ProcessVerifyTask(workerNum, task)
+			defer session.EndSession(ctx)
+
+			_, err = session.WithTransaction(
+				ctx,
+				func(sctx mongo.SessionContext) (any, error) {
+					return nil, verifier.workInTransaction(sctx, workerNum)
+				},
+			)
+
+			if err != nil {
+				verifier.logger.Fatal().Err(err).Send()
 			}
 		}
 	}
+}
+
+func (verifier *Verifier) workInTransaction(
+	ctx context.Context,
+	workerNum int,
+) error {
+	task, err := verifier.FindNextVerifyTaskAndUpdate(ctx)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		verifier.logger.Debug().Msgf("[Worker %d] No tasks found, sleeping...", workerNum)
+		time.Sleep(verifier.workerSleepDelayMillis * time.Millisecond)
+		return nil
+	} else if err != nil {
+		return errors.Wrap(err, "failed to find & update next task")
+	}
+
+	if task.Type == verificationTaskVerifyCollection {
+		verifier.ProcessCollectionVerificationTask(ctx, workerNum, task)
+		if task.Generation == 0 {
+			newVal := verifier.gen0PendingCollectionTasks.Add(-1)
+			if newVal == 0 {
+				verifier.PrintVerificationSummary(ctx, Gen0MetadataAnalysisComplete)
+			}
+		}
+	} else {
+		verifier.ProcessVerifyTask(ctx, workerNum, task)
+	}
+
+	return nil
 }

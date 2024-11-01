@@ -206,13 +206,13 @@ func (suite *MultiDataVersionTestSuite) TestVerifierFetchDocuments() {
 
 	// Test fetchDocuments without global filter.
 	verifier.globalFilter = nil
-	srcDocumentMap, dstDocumentMap, err := verifier.fetchDocuments(task)
+	srcDocumentMap, dstDocumentMap, err := verifier.fetchDocuments(ctx, task)
 	suite.Require().NoError(err)
 	expectTwoCommonDocs(srcDocumentMap, dstDocumentMap)
 
 	// Test fetchDocuments for ids with a global filter.
 	verifier.globalFilter = map[string]any{"num": map[string]any{"$lt": 100}}
-	srcDocumentMap, dstDocumentMap, err = verifier.fetchDocuments(task)
+	srcDocumentMap, dstDocumentMap, err = verifier.fetchDocuments(ctx, task)
 	suite.Require().NoError(err)
 	expectOneCommonDoc(srcDocumentMap, dstDocumentMap)
 
@@ -222,7 +222,7 @@ func (suite *MultiDataVersionTestSuite) TestVerifierFetchDocuments() {
 		IsCapped: false,
 	}
 	verifier.globalFilter = map[string]any{"num": map[string]any{"$lt": 100}}
-	srcDocumentMap, dstDocumentMap, err = verifier.fetchDocuments(task)
+	srcDocumentMap, dstDocumentMap, err = verifier.fetchDocuments(ctx, task)
 	suite.Require().NoError(err)
 	expectOneCommonDoc(srcDocumentMap, dstDocumentMap)
 }
@@ -305,10 +305,10 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 	// Now add 2 namespaces. Add them “out of order” to test
 	// that we sort the returned array by Namespace.
 
-	task2, err := verifier.InsertCollectionVerificationTask("mydb.coll2")
+	task2, err := verifier.InsertCollectionVerificationTask(ctx, "mydb.coll2")
 	suite.Require().NoError(err)
 
-	task1, err := verifier.InsertCollectionVerificationTask("mydb.coll1")
+	task1, err := verifier.InsertCollectionVerificationTask(ctx, "mydb.coll1")
 	suite.Require().NoError(err)
 
 	stats, err = verifier.GetNamespaceStatistics(ctx)
@@ -333,10 +333,10 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 	task2.SourceDocumentCount = 900
 	task2.SourceByteCount = 9_000
 
-	err = verifier.UpdateVerificationTask(task2)
+	err = verifier.UpdateVerificationTask(ctx, task2)
 	suite.Require().NoError(err)
 
-	err = verifier.UpdateVerificationTask(task1)
+	err = verifier.UpdateVerificationTask(ctx, task1)
 	suite.Require().NoError(err)
 
 	stats, err = verifier.GetNamespaceStatistics(ctx)
@@ -365,6 +365,7 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 	task2parts := [2]*VerificationTask{}
 	for i := range task1parts {
 		task1part, err := verifier.InsertPartitionVerificationTask(
+			ctx,
 			&partitions.Partition{
 				Ns: &partitions.Namespace{DB: "mydb", Coll: "coll1"},
 			},
@@ -376,6 +377,7 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 		task1parts[i] = task1part
 
 		task2part, err := verifier.InsertPartitionVerificationTask(
+			ctx,
 			&partitions.Partition{
 				Ns: &partitions.Namespace{DB: "mydb", Coll: "coll2"},
 			},
@@ -412,7 +414,7 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 	// Now set one task to status=processing
 
 	task1parts[0].Status = verificationTaskProcessing
-	err = verifier.UpdateVerificationTask(task1parts[0])
+	err = verifier.UpdateVerificationTask(ctx, task1parts[0])
 	suite.Require().NoError(err)
 
 	stats, err = verifier.GetNamespaceStatistics(ctx)
@@ -448,10 +450,10 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 	task2parts[1].SourceDocumentCount = task2.SourceDocumentCount / 2
 	task2parts[1].SourceByteCount = task2.SourceByteCount / 2
 
-	err = verifier.UpdateVerificationTask(task2parts[0])
+	err = verifier.UpdateVerificationTask(ctx, task2parts[0])
 	suite.Require().NoError(err)
 
-	err = verifier.UpdateVerificationTask(task2parts[1])
+	err = verifier.UpdateVerificationTask(ctx, task2parts[1])
 	suite.Require().NoError(err)
 
 	stats, err = verifier.GetNamespaceStatistics(ctx)
@@ -483,11 +485,11 @@ func (suite *MultiMetaVersionTestSuite) TestGetNamespaceStatistics_Gen0() {
 func (suite *MultiMetaVersionTestSuite) TestFailedVerificationTaskInsertions() {
 	ctx := context.Background()
 	verifier := buildVerifier(suite.T(), suite.srcMongoInstance, suite.dstMongoInstance, suite.metaMongoInstance)
-	err := verifier.InsertFailedCompareRecheckDocs("foo.bar", []interface{}{42}, []int{100})
+	err := verifier.InsertFailedCompareRecheckDocs(ctx, "foo.bar", []interface{}{42}, []int{100})
 	suite.Require().NoError(err)
-	err = verifier.InsertFailedCompareRecheckDocs("foo.bar", []interface{}{43, 44}, []int{100, 100})
+	err = verifier.InsertFailedCompareRecheckDocs(ctx, "foo.bar", []interface{}{43, 44}, []int{100, 100})
 	suite.Require().NoError(err)
-	err = verifier.InsertFailedCompareRecheckDocs("foo.bar2", []interface{}{42}, []int{100})
+	err = verifier.InsertFailedCompareRecheckDocs(ctx, "foo.bar2", []interface{}{42}, []int{100})
 	suite.Require().NoError(err)
 	event := ParsedEvent{
 		DocKey: DocKey{ID: int32(55)},
@@ -1335,7 +1337,7 @@ func (suite *MultiDataVersionTestSuite) TestVerificationStatus() {
 	})
 	suite.Require().NoError(err)
 
-	status, err := verifier.GetVerificationStatus()
+	status, err := verifier.GetVerificationStatus(ctx)
 	suite.Require().NoError(err)
 	suite.Equal(1, status.AddedTasks, "added tasks not equal")
 	suite.Equal(1, status.ProcessingTasks, "processing tasks not equal")
@@ -1370,14 +1372,14 @@ func (suite *MultiDataVersionTestSuite) TestGenerationalRechecking() {
 	}()
 
 	waitForTasks := func() *VerificationStatus {
-		status, err := verifier.GetVerificationStatus()
+		status, err := verifier.GetVerificationStatus(ctx)
 		suite.Require().NoError(err)
 
 		for status.TotalTasks == 0 && verifier.generation < 10 {
 			suite.T().Logf("TotalTasks is 0 (generation=%d); waiting another generation …", verifier.generation)
 			checkContinueChan <- struct{}{}
 			<-checkDoneChan
-			status, err = verifier.GetVerificationStatus()
+			status, err = verifier.GetVerificationStatus(ctx)
 			suite.Require().NoError(err)
 		}
 		return status
@@ -1437,7 +1439,7 @@ func (suite *MultiDataVersionTestSuite) TestGenerationalRechecking() {
 	<-checkDoneChan
 	// now write to the source, this should not be seen by the change stream which should have ended
 	// because of the calls to WritesOff
-	status, err = verifier.GetVerificationStatus()
+	status, err = verifier.GetVerificationStatus(ctx)
 	suite.Require().NoError(err)
 	// there should be a failure from the src insert
 	suite.Require().Equal(VerificationStatus{TotalTasks: 1, FailedTasks: 1}, *status)
@@ -1486,14 +1488,14 @@ func (suite *MultiDataVersionTestSuite) TestVerifierWithFilter() {
 	}()
 
 	waitForTasks := func() *VerificationStatus {
-		status, err := verifier.GetVerificationStatus()
+		status, err := verifier.GetVerificationStatus(ctx)
 		suite.Require().NoError(err)
 
 		for status.TotalTasks == 0 && verifier.generation < 10 {
 			suite.T().Logf("TotalTasks is 0 (generation=%d); waiting another generation …", verifier.generation)
 			checkContinueChan <- struct{}{}
 			<-checkDoneChan
-			status, err = verifier.GetVerificationStatus()
+			status, err = verifier.GetVerificationStatus(ctx)
 			suite.Require().NoError(err)
 		}
 		return status

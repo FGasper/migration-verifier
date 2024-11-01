@@ -457,8 +457,8 @@ func (verifier *Verifier) getDocumentsCursor(ctx context.Context, collection *mo
 	return collection.Database().RunCommandCursor(ctx, findCmd, runCommandOptions)
 }
 
-func (verifier *Verifier) FetchAndCompareDocuments(task *VerificationTask) ([]VerificationResult, types.DocumentCount, types.ByteCount, error) {
-	srcClientMap, dstClientMap, err := verifier.fetchDocuments(task)
+func (verifier *Verifier) FetchAndCompareDocuments(ctx context.Context, task *VerificationTask) ([]VerificationResult, types.DocumentCount, types.ByteCount, error) {
+	srcClientMap, dstClientMap, err := verifier.fetchDocuments(ctx, task)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -472,11 +472,11 @@ func (verifier *Verifier) FetchAndCompareDocuments(task *VerificationTask) ([]Ve
 }
 
 // This is split out to allow unit testing of fetching separate from comparison.
-func (verifier *Verifier) fetchDocuments(task *VerificationTask) (*documentmap.Map, *documentmap.Map, error) {
+func (verifier *Verifier) fetchDocuments(ctx context.Context, task *VerificationTask) (*documentmap.Map, *documentmap.Map, error) {
 
 	var srcErr, dstErr error
 
-	errGroup, ctx := errgroup.WithContext(context.Background())
+	errGroup, ctx := errgroup.WithContext(ctx)
 
 	shardFieldNames := task.QueryFilter.ShardKeys
 
@@ -632,10 +632,10 @@ func (verifier *Verifier) compareOneDocument(srcClientDoc, dstClientDoc bson.Raw
 	}}, nil
 }
 
-func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTask) {
+func (verifier *Verifier) ProcessVerifyTask(ctx context.Context, workerNum int, task *VerificationTask) {
 	verifier.logger.Debug().Msgf("[Worker %d] Processing verify task", workerNum)
 
-	problems, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(task)
+	problems, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(ctx, task)
 
 	if err != nil {
 		task.Status = verificationTaskFailed
@@ -682,7 +682,7 @@ func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTas
 
 				// Create a task for the next generation to recheck the
 				// mismatched & missing docs.
-				err := verifier.InsertFailedCompareRecheckDocs(task.QueryFilter.Namespace, idsToRecheck, dataSizes)
+				err := verifier.InsertFailedCompareRecheckDocs(ctx, task.QueryFilter.Namespace, idsToRecheck, dataSizes)
 				if err != nil {
 					verifier.logger.Error().Msgf("[Worker %d] Error inserting document mismatch into Recheck queue: %+v", workerNum, err)
 				}
@@ -690,7 +690,7 @@ func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTas
 		}
 	}
 
-	err = verifier.UpdateVerificationTask(task)
+	err = verifier.UpdateVerificationTask(ctx, task)
 	if err != nil {
 		verifier.logger.Error().Msgf("Failed updating verification status: %v", err)
 	}
@@ -969,10 +969,13 @@ func nilableToString[T any](ptr *T) string {
 
 func (verifier *Verifier) ProcessCollectionVerificationTask(ctx context.Context, workerNum int, task *VerificationTask) {
 	verifier.logger.Debug().Msgf("[Worker %d] Processing collection", workerNum)
+
 	verifier.verifyMetadataAndPartitionCollection(ctx, workerNum, task)
-	err := verifier.UpdateVerificationTask(task)
+	err := verifier.UpdateVerificationTask(ctx, task)
+
 	if err != nil {
-		verifier.logger.Error().Msgf("Failed updating verification status: %v", err)
+		verifier.logger.Fatal().Err(err).
+			Msg("Failed to update collection verification task")
 	}
 }
 
@@ -1058,7 +1061,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 	}
 
 	insertFailedCollection := func() {
-		_, err := verifier.InsertFailedCollectionVerificationTask(srcNs)
+		_, err := verifier.InsertFailedCollectionVerificationTask(ctx, srcNs)
 		if err != nil {
 			verifier.
 				logger.
@@ -1126,7 +1129,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 	task.SourceByteCount = bytesCount
 
 	for _, partition := range partitions {
-		_, err := verifier.InsertPartitionVerificationTask(partition, shardKeys, dstNs)
+		_, err := verifier.InsertPartitionVerificationTask(ctx, partition, shardKeys, dstNs)
 		if err != nil {
 			task.Status = verificationTaskFailed
 			verifier.logger.Error().Msgf("[Worker %d] Error inserting verifier tasks: %+v", workerNum, err)
@@ -1138,8 +1141,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(ctx context.Conte
 	}
 }
 
-func (verifier *Verifier) GetVerificationStatus() (*VerificationStatus, error) {
-	ctx := context.Background()
+func (verifier *Verifier) GetVerificationStatus(ctx context.Context) (*VerificationStatus, error) {
 	taskCollection := verifier.verificationTaskCollection()
 	generation, _ := verifier.getGeneration()
 
@@ -1281,7 +1283,7 @@ func (verifier *Verifier) StartServer() error {
 }
 
 func (verifier *Verifier) GetProgress(ctx context.Context) (Progress, error) {
-	status, err := verifier.GetVerificationStatus()
+	status, err := verifier.GetVerificationStatus(ctx)
 	if err != nil {
 		return Progress{Error: err}, err
 	}

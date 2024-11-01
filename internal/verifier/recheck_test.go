@@ -15,6 +15,7 @@ func (suite *MultiMetaVersionTestSuite) TestFailedCompareThenReplace() {
 
 	suite.Require().NoError(
 		verifier.InsertFailedCompareRecheckDocs(
+			ctx,
 			"the.namespace",
 			[]any{"theDocID"},
 			[]int{1234},

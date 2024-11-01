@@ -86,13 +86,15 @@ func BenchmarkGeneric(t *testing.B) {
 		t.Fatal(err)
 	}
 
+	ctx := context.Background()
+
 	println("Starting tasks")
 	for _, namespace := range namespaces {
 		fmt.Printf("Starting task with '%s' namespace\n", namespace)
 		qfilter := QueryFilter{Namespace: namespace}
 		task := VerificationTask{QueryFilter: qfilter}
 		// TODO: is this safe?
-		mismatchedIds, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(&task)
+		mismatchedIds, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(ctx, &task)
 		if err != nil {
 			t.Fatal(err)
 		}
