@@ -290,7 +290,7 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 		}
 	}
 
-	verifier.doInMetaTransaction(
+	err := verifier.doInMetaTransaction(
 		ctx,
 		func(sctx mongo.SessionContext) error {
 			isPrimary, err := verifier.CheckIsPrimary(ctx)
@@ -324,6 +324,10 @@ func (verifier *Verifier) CreateInitialTasks(ctx context.Context) error {
 			return nil
 		},
 	)
+
+	if err != nil {
+		verifier.logger.Fatal().Err(err).Send()
+	}
 
 	return nil
 }
