@@ -78,7 +78,6 @@ type cursorLike interface {
 }
 
 func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
-	fmt.Printf("\n---------- exhausting change events (batch remaining=%d)\n", cursor.RemainingBatchLength())
 	for {
 		var obj T
 
@@ -96,7 +95,6 @@ func exhaustCursorBatch[T any, C cursorLike](cursor C, target *[]T) error {
 			panic("should already be another document waiting")
 		}
 	}
-	fmt.Printf("\n---- done exhausting\n")
 
 	return nil
 }
