@@ -222,7 +222,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 		}
 		time.Sleep(verifier.generationPauseDelayMillis * time.Millisecond)
 		verifier.mux.Lock()
-		if verifier.lastGeneration {
+		if verifier.isFinalGeneration {
 			verifier.mux.Unlock()
 
 			verifier.logger.Debug().
@@ -247,7 +247,7 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 				return err
 			}
 			verifier.mux.Lock()
-			verifier.lastGeneration = true
+			verifier.isFinalGeneration = true
 		}
 		verifier.generation++
 		verifier.phase = Recheck

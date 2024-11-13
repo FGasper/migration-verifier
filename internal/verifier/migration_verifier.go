@@ -79,7 +79,7 @@ var timeFormat = time.RFC3339
 // Verifier is the main state for the migration verifier
 type Verifier struct {
 	writesOff          bool
-	lastGeneration     bool
+	isFinalGeneration  bool
 	running            bool
 	generation         int
 	phase              string
@@ -400,9 +400,9 @@ func DocumentStats(ctx context.Context, client *mongo.Client, namespaces []strin
 	fmt.Println()
 }
 
-func (verifier *Verifier) getGeneration() (generation int, lastGeneration bool) {
+func (verifier *Verifier) getGeneration() (generation int, isFinalGeneration bool) {
 	verifier.mux.RLock()
-	generation, lastGeneration = verifier.generation, verifier.lastGeneration
+	generation, isFinalGeneration = verifier.generation, verifier.isFinalGeneration
 	verifier.mux.RUnlock()
 	return
 }
@@ -417,7 +417,7 @@ func (verifier *Verifier) getGenerationWhileLocked() (int, bool) {
 		panic("getGenerationWhileLocked() while unlocked")
 	}
 
-	return verifier.generation, verifier.lastGeneration
+	return verifier.generation, verifier.isFinalGeneration
 }
 
 func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A) bson.A {
@@ -558,8 +558,8 @@ func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTas
 			task.Status = verificationTaskCompleted
 		} else {
 			task.Status = verificationTaskFailed
-			// We know we won't change lastGeneration while verification tasks are running, so no mutex needed here.
-			if verifier.lastGeneration {
+			// We know we won't change isFinalGeneration while verification tasks are running, so no mutex needed here.
+			if verifier.isFinalGeneration {
 				verifier.logger.Error().Msgf("[Worker %d] Verification Task %+v failed critical section and is a true error",
 					workerNum, task.PrimaryKey)
 			} else {
