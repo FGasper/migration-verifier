@@ -550,11 +550,13 @@ func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTas
 
 	startTime := time.Now()
 
-	defer verifier.logger.Debug().
-		Int("workerNum", workerNum).
-		Interface("task", task.PrimaryKey).
-		Stringer("timeElapsed", time.Now().Sub(startTime)).
-		Msg("Done processing verify task.")
+	defer func() {
+		verifier.logger.Debug().
+			Int("workerNum", workerNum).
+			Interface("task", task.PrimaryKey).
+			Stringer("timeElapsed", time.Now().Sub(startTime)).
+			Msg("Done processing verify task.")
+	}()
 
 	problems, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(
 		context.Background(),

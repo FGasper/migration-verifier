@@ -57,6 +57,10 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 					dstChannel,
 				)
 
+				if err != nil {
+					verifier.logger.Error().Err(err).Msg("compareDocsFromChannels failure")
+				}
+
 				return err
 			})
 
@@ -139,6 +143,8 @@ func (verifier *Verifier) compareDocsFromChannels(
 		// Finally we compare the documents and save any mismatch report(s).
 		mismatches, err := verifier.compareOneDocument(srcDoc, dstDoc, namespace)
 		if err != nil {
+			verifier.logger.Error().Err(err).Msg("comparison failure")
+
 			return errors.Wrap(err, "failed to compare documents")
 		}
 
@@ -202,6 +208,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 	}
 
 	if err != nil {
+		verifier.logger.Error().Err(err).Msg("comparer thread failed")
 		return nil, 0, 0, errors.Wrap(err, "comparer thread failed")
 	}
 
@@ -273,6 +280,10 @@ func (verifier *Verifier) getFetcherChannels(
 			)
 		}
 
+		if err != nil {
+			verifier.logger.Error().Err(err).Msg("source read failure")
+		}
+
 		return err
 	})
 
@@ -295,6 +306,10 @@ func (verifier *Verifier) getFetcherChannels(
 				err,
 				"failed to find destination documents",
 			)
+		}
+
+		if err != nil {
+			verifier.logger.Error().Err(err).Msg("destination read failure")
 		}
 
 		return err
