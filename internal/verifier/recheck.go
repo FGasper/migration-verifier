@@ -169,7 +169,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 			dataSizeAccum >= verifier.partitionSizeInBytes {
 			namespace := prevDBName + "." + prevCollName
 			if len(idAccum) > 0 {
-				err := verifier.InsertFailedIdsVerificationTask(idAccum, types.ByteCount(dataSizeAccum), namespace)
+				err := verifier.InsertDocIdsVerificationTaskWhileLocked(idAccum, types.ByteCount(dataSizeAccum), namespace)
 				if err != nil {
 					return err
 				}
@@ -190,7 +190,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 	}
 	if len(idAccum) > 0 {
 		namespace := prevDBName + "." + prevCollName
-		err := verifier.InsertFailedIdsVerificationTask(idAccum, types.ByteCount(dataSizeAccum), namespace)
+		err := verifier.InsertDocIdsVerificationTaskWhileLocked(idAccum, types.ByteCount(dataSizeAccum), namespace)
 		if err != nil {
 			return err
 		}

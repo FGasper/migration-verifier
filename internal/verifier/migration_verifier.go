@@ -408,16 +408,19 @@ func (verifier *Verifier) getGeneration() (generation int, isFinalGeneration boo
 }
 
 func (verifier *Verifier) getGenerationWhileLocked() (int, bool) {
+	verifier.assertLocked()
 
+	return verifier.generation, verifier.isFinalGeneration
+}
+
+func (verifier *Verifier) assertLocked() {
 	// As long as no other goroutine has locked the mux this will
 	// usefully panic if the caller neglected the lock.
 	wasUnlocked := verifier.mux.TryRLock()
 	if wasUnlocked {
 		verifier.mux.RUnlock()
-		panic("getGenerationWhileLocked() while unlocked")
+		panic("Verifier mutex should be locked!")
 	}
-
-	return verifier.generation, verifier.isFinalGeneration
 }
 
 func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A) bson.A {

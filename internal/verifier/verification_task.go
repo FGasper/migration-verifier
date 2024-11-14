@@ -153,7 +153,14 @@ func (verifier *Verifier) InsertPartitionVerificationTask(partition *partitions.
 	return &verificationTask, err
 }
 
-func (verifier *Verifier) InsertFailedIdsVerificationTask(ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
+// InsertDocIdsVerificationTaskWhileLocked inserts a document-verification task whose
+// documents are identified by specific IDs rather than a partition.
+// Such tasks are only for recheck (i.e., generations 1+).
+//
+// The verifier MUST be locked while this method is called.
+func (verifier *Verifier) InsertDocIdsVerificationTaskWhileLocked(ids []interface{}, dataSize types.ByteCount, srcNamespace string) error {
+	verifier.assertLocked()
+
 	dstNamespace := srcNamespace
 	if len(verifier.nsMap) != 0 {
 		var ok bool
