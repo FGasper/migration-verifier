@@ -369,7 +369,10 @@ func FetchFailedAndIncompleteTasks(ctx context.Context, coll *mongo.Collection, 
 }
 
 func (verifier *Verifier) Work(ctx context.Context, workerNum int, wg *sync.WaitGroup) {
-	defer wg.Done()
+	defer func() {
+		wg.Done()
+		verifier.logger.Debug().Msgf("[Worker %d] Finished", workerNum)
+	}()
 	verifier.logger.Debug().Msgf("[Worker %d] Started", workerNum)
 	for {
 		select {
