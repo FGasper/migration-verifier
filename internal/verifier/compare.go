@@ -268,6 +268,14 @@ func (verifier *Verifier) getFetcherChannels(
 			task,
 		)
 
+		verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("cursor opened for source.")
+
+		defer verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("Finished cursor for source.")
+
 		if err == nil {
 			err = errors.Wrap(
 				iterateCursorToChannel(ctx, cursor, srcChannel),
@@ -295,6 +303,14 @@ func (verifier *Verifier) getFetcherChannels(
 			nil, //startAtTs
 			task,
 		)
+
+		verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("cursor opened for destination.")
+
+		defer verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("Finished cursor for destination.")
 
 		if err == nil {
 			err = errors.Wrap(

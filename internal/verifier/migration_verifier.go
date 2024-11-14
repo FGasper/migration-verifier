@@ -434,6 +434,7 @@ func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A)
 
 func (verifier *Verifier) getDocumentsCursor(ctx context.Context, collection *mongo.Collection, buildInfo *bson.M,
 	startAtTs *primitive.Timestamp, task *VerificationTask) (*mongo.Cursor, error) {
+
 	var findOptions bson.D
 	runCommandOptions := options.RunCmd()
 	var andPredicates bson.A
@@ -462,7 +463,11 @@ func (verifier *Verifier) getDocumentsCursor(ctx context.Context, collection *mo
 		}
 	}
 	findCmd := append(bson.D{{"find", collection.Name()}}, findOptions...)
-	verifier.logger.Debug().Msgf("getDocuments findCmd: %s opts: %v", findCmd, *runCommandOptions)
+	verifier.logger.Debug().
+		Str("findCmd", fmt.Sprintf("%s", findCmd)).
+		Str("options", fmt.Sprintf("%v", *runCommandOptions)).
+		Interface("task", task.PrimaryKey).
+		Msg("getDocuments findCmd.")
 
 	return collection.Database().RunCommandCursor(ctx, findCmd, runCommandOptions)
 }
