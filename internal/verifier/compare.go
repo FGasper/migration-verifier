@@ -22,6 +22,10 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 	types.ByteCount,
 	error,
 ) {
+	defer verifier.logger.Debug().
+		Interface("task", task.PrimaryKey).
+		Msg("Finishing fetch & compare for task.")
+
 	var results []VerificationResult
 	var docCount types.DocumentCount
 	var byteCount types.ByteCount
