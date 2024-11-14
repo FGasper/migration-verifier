@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -41,6 +42,10 @@ func (verifier *Verifier) InsertFailedCompareRecheckDocs(
 		dbNames[i] = dbName
 		collNames[i] = collName
 	}
+
+	verifier.logger.Debug().
+		Int("count", len(documentIDs)).
+		Msg("Persisting rechecks for mismatched or missing documents.")
 
 	return verifier.insertRecheckDocs(
 		context.Background(),
@@ -91,10 +96,18 @@ func (verifier *Verifier) insertRecheckDocs(
 	_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(ctx, models)
 
 	if err == nil {
-		verifier.logger.Debug().Msgf("Persisted %d recheck doc(s) for generation %d", len(models), generation)
+		verifier.logger.Debug().
+			Int("generation", generation).
+			Int("count", len(models)).
+			Msg("Persisted rechecks.")
 	}
 
-	return err
+	return errors.Wrapf(
+		err,
+		"failed to persist %d recheck(s) for generation %d",
+		len(models),
+		generation,
+	)
 }
 
 // ClearRecheckDocs deletes the previous generation’s recheck
