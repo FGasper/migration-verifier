@@ -93,7 +93,11 @@ func (verifier *Verifier) insertRecheckDocs(
 			mongo.NewReplaceOneModel().
 				SetFilter(filterDoc).SetReplacement(recheckDoc).SetUpsert(true))
 	}
-	_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(ctx, models)
+	_, err := verifier.verificationDatabase().Collection(recheckQueue).BulkWrite(
+		ctx,
+		models,
+		options.BulkWrite().SetOrdered(false),
+	)
 
 	if err == nil {
 		verifier.logger.Debug().
