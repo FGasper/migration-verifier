@@ -124,7 +124,7 @@ func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
 				{"$addFields", bson.D{
 					{"documentSize", bson.D{
 						{"$cond", bson.D{
-							{"$if", bson.D{
+							{"if", bson.D{
 								{"$ne", bson.A{
 									"missing",
 									bson.D{{"$type", "$fullDocument"}},
@@ -148,6 +148,42 @@ func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
 	)
 }
 
+type DocumentStream interface {
+	Decode(any) error
+	RemainingBatchLength() int
+	TryNext(context.Context) bool
+	Err() error
+}
+
+func tryDecodeBatch[T any](ctx context.Context, stream DocumentStream) ([]T, error) {
+	var changeEventBatch []T
+	eventsRead := 0
+
+	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = stream.RemainingBatchLength() > 0 {
+		gotEvent := stream.TryNext(ctx)
+
+		if stream.Err() != nil {
+			return nil, stream.Err()
+		}
+
+		if !gotEvent {
+			break
+		}
+
+		if changeEventBatch == nil {
+			changeEventBatch = make([]T, stream.RemainingBatchLength()+1)
+		}
+
+		if err := stream.Decode(&changeEventBatch[eventsRead]); err != nil {
+			return nil, err
+		}
+
+		eventsRead++
+	}
+
+	return changeEventBatch, nil
+}
+
 func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mongo.ChangeStream) {
 	var lastPersistedTime time.Time
 
@@ -165,28 +201,14 @@ func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mong
 	}
 
 	readAndHandleOneChangeEventBatch := func() (bool, error) {
-		eventsRead := 0
-		var changeEventBatch []ParsedEvent
-
-		for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
-			gotEvent := cs.TryNext(ctx)
-
-			if !gotEvent || cs.Err() != nil {
-				break
-			}
-
-			if changeEventBatch == nil {
-				changeEventBatch = make([]ParsedEvent, cs.RemainingBatchLength()+1)
-			}
-
-			if err := cs.Decode(&changeEventBatch[eventsRead]); err != nil {
-				return false, errors.Wrap(err, "failed to decode change event")
-			}
-
-			eventsRead++
+		changeEventBatch, err := tryDecodeBatch[ParsedEvent](ctx, cs)
+		if err != nil {
+			return false, errors.Wrap(err, "failed to read a batch of change events")
 		}
 
-		if eventsRead > 0 {
+		eventsRead := len(changeEventBatch)
+
+		if len(changeEventBatch) > 0 {
 			verifier.logger.Debug().Int("eventsCount", eventsRead).Msgf("Received a batch of events.")
 			err := verifier.HandleChangeStreamEvents(ctx, changeEventBatch)
 			if err != nil {
@@ -194,7 +216,7 @@ func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mong
 			}
 		}
 
-		return eventsRead > 0, errors.Wrap(cs.Err(), "change stream iteration failed")
+		return eventsRead > 0, nil
 	}
 
 	for {
