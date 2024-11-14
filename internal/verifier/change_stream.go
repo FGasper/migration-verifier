@@ -184,7 +184,7 @@ func tryDecodeBatch[T any](ctx context.Context, stream DocumentStream) ([]T, err
 	return changeEventBatch, nil
 }
 
-func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mongo.ChangeStream) {
+func (verifier *Verifier) iterateChangeStream(ctx context.Context, cs *mongo.ChangeStream) {
 	var lastPersistedTime time.Time
 
 	persistResumeTokenIfNeeded := func() error {
@@ -313,7 +313,7 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context) error {
 
 		ts, err := extractTimestampFromResumeToken(savedResumeToken)
 		if err == nil {
-			logEvent = addUnixTimeToLogEvent(ts.T, logEvent, "timestamp")
+			logEvent = addUnixTimeToLogEvent(ts.T, logEvent)
 		} else {
 			verifier.logger.Warn().
 				Err(err).
@@ -337,7 +337,7 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context) error {
 		return errors.Wrap(err, "failed to open change stream")
 	}
 
-	err = verifier.persistChangeStreamResumeToken(sctx, srcChangeStream)
+	err = verifier.persistChangeStreamResumeToken(ctx, srcChangeStream)
 	if err != nil {
 		return err
 	}
@@ -361,16 +361,13 @@ func (verifier *Verifier) StartChangeStream(ctx context.Context) error {
 	verifier.changeStreamRunning = true
 	verifier.mux.Unlock()
 
-	go verifier.iterateChangeStream(
-		mongo.NewSessionContext(ctx, sess),
-		srcChangeStream,
-	)
+	go verifier.iterateChangeStream(ctx, srcChangeStream)
 
 	return nil
 }
 
-func addUnixTimeToLogEvent[T constraints.Integer](unixTime T, event *zerolog.Event, name string) *zerolog.Event {
-	return event.Time(name, time.Unix(int64(unixTime), int64(0)))
+func addUnixTimeToLogEvent[T constraints.Integer](unixTime T, event *zerolog.Event) *zerolog.Event {
+	return event.Time("clockTime", time.Unix(int64(unixTime), int64(0)))
 }
 
 func (v *Verifier) getChangeStreamMetadataCollection() *mongo.Collection {
@@ -392,7 +389,7 @@ func (verifier *Verifier) loadChangeStreamResumeToken(ctx context.Context) (bson
 	return token, err
 }
 
-func (verifier *Verifier) persistChangeStreamResumeToken(ctx mongo.SessionContext, cs *mongo.ChangeStream) error {
+func (verifier *Verifier) persistChangeStreamResumeToken(ctx context.Context, cs *mongo.ChangeStream) error {
 	token := cs.ResumeToken()
 
 	coll := verifier.getChangeStreamMetadataCollection()
@@ -408,32 +405,11 @@ func (verifier *Verifier) persistChangeStreamResumeToken(ctx mongo.SessionContex
 
 		logEvent := verifier.logger.Debug()
 
-		var hasResumeTokenTimestamp bool
 		if err == nil {
-			hasResumeTokenTimestamp = true
-			logEvent = addUnixTimeToLogEvent(ts.T, logEvent, "timestamp")
+			logEvent = addUnixTimeToLogEvent(ts.T, logEvent)
 		} else {
 			verifier.logger.Warn().Err(err).
 				Msg("failed to extract resume token timestamp")
-		}
-
-		clusterTime, err := getClusterTimeFromSession(ctx)
-		if err == nil {
-			logEvent = addUnixTimeToLogEvent(clusterTime.T, logEvent, "clusterTime")
-
-			if hasResumeTokenTimestamp {
-				lag := time.Second * time.Duration(clusterTime.T-ts.T)
-
-				if lag > 30*time.Minute {
-					verifier.logger.Warn().
-						Stringer("lag", lag).
-						Msg("Lag time seems excessive. This data may change faster than migration-verifier can enqueue rechecks. Please minimize changes to the data during verification.")
-				}
-				logEvent = logEvent.Stringer("lag", lag)
-			}
-		} else {
-			verifier.logger.Warn().Err(err).
-				Msg("failed to extract cluster time from change stream session")
 		}
 
 		logEvent.Msg("Persisted change stream resume token.")
