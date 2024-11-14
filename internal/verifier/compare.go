@@ -260,6 +260,10 @@ func (verifier *Verifier) getFetcherChannels(
 	dstChannel := make(chan bson.Raw)
 
 	errGroup.Go(func() error {
+		verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("Opening cursor for source.")
+
 		cursor, err := verifier.getDocumentsCursor(
 			ctx,
 			verifier.srcClientCollection(task),
@@ -270,7 +274,7 @@ func (verifier *Verifier) getFetcherChannels(
 
 		verifier.logger.Debug().
 			Interface("task", task.PrimaryKey).
-			Msg("cursor opened for source.")
+			Msg("Cursor opened for source.")
 
 		defer verifier.logger.Debug().
 			Interface("task", task.PrimaryKey).
@@ -296,6 +300,10 @@ func (verifier *Verifier) getFetcherChannels(
 	})
 
 	errGroup.Go(func() error {
+		verifier.logger.Debug().
+			Interface("task", task.PrimaryKey).
+			Msg("Opening cursor for destination.")
+
 		cursor, err := verifier.getDocumentsCursor(
 			ctx,
 			verifier.dstClientCollection(task),
@@ -306,7 +314,7 @@ func (verifier *Verifier) getFetcherChannels(
 
 		verifier.logger.Debug().
 			Interface("task", task.PrimaryKey).
-			Msg("cursor opened for destination.")
+			Msg("Cursor opened for destination.")
 
 		defer verifier.logger.Debug().
 			Interface("task", task.PrimaryKey).
