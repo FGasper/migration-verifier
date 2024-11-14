@@ -543,7 +543,7 @@ func (verifier *Verifier) compareOneDocument(srcClientDoc, dstClientDoc bson.Raw
 }
 
 func (verifier *Verifier) ProcessVerifyTask(workerNum int, task *VerificationTask) {
-	verifier.logger.Debug().Msgf("[Worker %d] Processing verify task %d", workerNum, task.ID)
+	verifier.logger.Debug().Msgf("[Worker %d] Processing verify task %v", workerNum, task.PrimaryKey)
 
 	problems, docsCount, bytesCount, err := verifier.FetchAndCompareDocuments(
 		context.Background(),
