@@ -21,6 +21,7 @@ type ParsedEvent struct {
 	OpType      string               `bson:"operationType"`
 	Ns          *Namespace           `bson:"ns,omitempty"`
 	DocKey      DocKey               `bson:"documentKey,omitempty"`
+	DocSize     *int                 `bson:"documentSize,omitempty"`
 	ClusterTime *primitive.Timestamp `bson:"clusterTime,omitEmpty"`
 }
 
@@ -79,12 +80,14 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch []
 			collNames[i] = changeEvent.Ns.Coll
 			docIDs[i] = changeEvent.DocKey.ID
 
-			// We don't know the document sizes for documents for all change events,
-			// so just be conservative and assume they are maximum size.
-			//
-			// Note that this prevents us from being able to report a meaningful
-			// total data size for noninitial generations in the log.
-			dataSizes[i] = maxBSONObjSize
+			if changeEvent.DocSize == nil {
+				// This happens for deletes and for some updates.
+				// The document is probably, but not necessarily, deleted.
+				dataSizes[i] = 1024
+			} else {
+				// This happens for inserts, replaces, and most updates.
+				dataSizes[i] = *changeEvent.DocSize
+			}
 		default:
 			return UnknownEventError{Event: &changeEvent}
 		}
@@ -98,16 +101,51 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch []
 }
 
 func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
+	var pipeline mongo.Pipeline
+
 	if len(verifier.srcNamespaces) == 0 {
-		return []bson.D{{bson.E{"$match", bson.D{{"ns.db", bson.D{{"$ne", verifier.metaDBName}}}}}}}
+		pipeline = []bson.D{{bson.E{"$match", bson.D{{"ns.db", bson.D{{"$ne", verifier.metaDBName}}}}}}}
+	} else {
+		filter := bson.A{}
+		for _, ns := range verifier.srcNamespaces {
+			db, coll := SplitNamespace(ns)
+			filter = append(filter, bson.D{{"ns", bson.D{{"db", db}, {"coll", coll}}}})
+		}
+		stage := bson.D{{"$match", bson.D{{"$or", filter}}}}
+		pipeline = []bson.D{stage}
 	}
-	filter := bson.A{}
-	for _, ns := range verifier.srcNamespaces {
-		db, coll := SplitNamespace(ns)
-		filter = append(filter, bson.D{{"ns", bson.D{{"db", db}, {"coll", coll}}}})
-	}
-	stage := bson.D{{"$match", bson.D{{"$or", filter}}}}
-	return []bson.D{stage}
+
+	return append(
+		pipeline,
+		[]bson.D{
+
+			// Add a documentSize field.
+			{
+				{"$addFields", bson.D{
+					{"documentSize", bson.D{
+						{"$cond", bson.D{
+							{"$if", bson.D{
+								{"$ne", bson.A{
+									"missing",
+									bson.D{{"$type", "$fullDocument"}},
+								}},
+							}}, // fullDocument exists
+							{"then", bson.D{{"$binarySize", "$fullDocument"}}},
+							{"else", "$$REMOVE"},
+						}},
+					}},
+				}},
+			},
+
+			// Remove the fullDocument field since a) we don't use it, and
+			// b) it's big.
+			{
+				{"$project", bson.D{
+					{"fullDocument", 0},
+				}},
+			},
+		}...,
+	)
 }
 
 func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mongo.ChangeStream) {
@@ -236,7 +274,9 @@ func (verifier *Verifier) iterateChangeStream(ctx mongo.SessionContext, cs *mong
 // StartChangeStream starts the change stream.
 func (verifier *Verifier) StartChangeStream(ctx context.Context) error {
 	pipeline := verifier.GetChangeStreamFilter()
-	opts := options.ChangeStream().SetMaxAwaitTime(1 * time.Second)
+	opts := options.ChangeStream().
+		SetFullDocument(options.UpdateLookup).
+		SetMaxAwaitTime(1 * time.Second)
 
 	savedResumeToken, err := verifier.loadChangeStreamResumeToken(ctx)
 	if err != nil {
