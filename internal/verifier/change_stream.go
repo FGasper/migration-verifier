@@ -17,12 +17,12 @@ import (
 
 // ParsedEvent contains the fields of an event that we have parsed from 'bson.Raw'.
 type ParsedEvent struct {
-	ID          interface{}          `bson:"_id"`
-	OpType      string               `bson:"operationType"`
-	Ns          *Namespace           `bson:"ns,omitempty"`
-	DocKey      DocKey               `bson:"documentKey,omitempty"`
-	DocSize     *int                 `bson:"documentSize,omitempty"`
-	ClusterTime *primitive.Timestamp `bson:"clusterTime,omitEmpty"`
+	ID           interface{}          `bson:"_id"`
+	OpType       string               `bson:"operationType"`
+	Ns           *Namespace           `bson:"ns,omitempty"`
+	DocKey       DocKey               `bson:"documentKey,omitempty"`
+	FullDocument bson.Raw             `bson:"fullDocument,omitempty"`
+	ClusterTime  *primitive.Timestamp `bson:"clusterTime,omitEmpty"`
 }
 
 func (pe *ParsedEvent) String() string {
@@ -80,13 +80,13 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch []
 			collNames[i] = changeEvent.Ns.Coll
 			docIDs[i] = changeEvent.DocKey.ID
 
-			if changeEvent.DocSize == nil {
+			if changeEvent.FullDocument == nil {
 				// This happens for deletes and for some updates.
 				// The document is probably, but not necessarily, deleted.
 				dataSizes[i] = 1024
 			} else {
 				// This happens for inserts, replaces, and most updates.
-				dataSizes[i] = *changeEvent.DocSize
+				dataSizes[i] = len(changeEvent.FullDocument)
 			}
 		default:
 			return UnknownEventError{Event: &changeEvent}
@@ -115,37 +115,7 @@ func (verifier *Verifier) GetChangeStreamFilter() []bson.D {
 		pipeline = []bson.D{stage}
 	}
 
-	return append(
-		pipeline,
-		[]bson.D{
-
-			// Add a documentSize field.
-			{
-				{"$addFields", bson.D{
-					{"documentSize", bson.D{
-						{"$cond", bson.D{
-							{"if", bson.D{
-								{"$ne", bson.A{
-									"missing",
-									bson.D{{"$type", "$fullDocument"}},
-								}},
-							}}, // fullDocument exists
-							{"then", bson.D{{"$binarySize", "$fullDocument"}}},
-							{"else", "$$REMOVE"},
-						}},
-					}},
-				}},
-			},
-
-			// Remove the fullDocument field since a) we don't use it, and
-			// b) it's big.
-			{
-				{"$project", bson.D{
-					{"fullDocument", 0},
-				}},
-			},
-		}...,
-	)
+	return pipeline
 }
 
 type DocumentStream interface {
