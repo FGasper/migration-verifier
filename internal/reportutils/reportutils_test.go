@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/logger"
+	"github.com/mongodb-labs/migration-verifier/internal/logger"
 	"github.com/dustin/go-humanize"
 	"github.com/stretchr/testify/suite"
 )

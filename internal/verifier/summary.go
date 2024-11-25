@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/reportutils"
-	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/mongodb-labs/migration-verifier/internal/reportutils"
+	"github.com/mongodb-labs/migration-verifier/internal/types"
 	"github.com/olekukonko/tablewriter"
 	"golang.org/x/exp/maps"
 )

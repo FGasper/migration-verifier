@@ -3,10 +3,10 @@ package verifier
 import (
 	"context"
 
-	"github.com/10gen/migration-verifier/internal/logger"
-	"github.com/10gen/migration-verifier/internal/retry"
-	"github.com/10gen/migration-verifier/internal/util"
-	"github.com/10gen/migration-verifier/mbson"
+	"github.com/mongodb-labs/migration-verifier/internal/logger"
+	"github.com/mongodb-labs/migration-verifier/internal/retry"
+	"github.com/mongodb-labs/migration-verifier/internal/util"
+	"github.com/mongodb-labs/migration-verifier/mbson"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"

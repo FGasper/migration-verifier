@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/logger"
-	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/mongodb-labs/migration-verifier/internal/logger"
+	"github.com/mongodb-labs/migration-verifier/internal/util"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -245,7 +245,7 @@ func (r *Retryer) runRetryLoop(
 //
 // For the above function, there have historically been concerns regarding majority write concern
 // upon retrying a write operation to the server. Mongomirror explicitly handled this:
-// https://github.com/10gen/mongomirror/blob/7dc961b1fe0d8986815277179c1e97f92f6b9808/mongomirror/mongomirror.go#L1265-L1272
+// https://github.com/mongodb-labs/mongomirror/blob/7dc961b1fe0d8986815277179c1e97f92f6b9808/mongomirror/mongomirror.go#L1265-L1272
 //
 // However, the server will generally honor write concern for a command that attempted a write, even if the write results in an error.
 // So explicit handling this upon a write command retry is not necessary:

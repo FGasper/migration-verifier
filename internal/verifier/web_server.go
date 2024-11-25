@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/logger"
+	"github.com/mongodb-labs/migration-verifier/internal/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"

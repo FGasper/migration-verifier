@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/10gen/migration-verifier/internal/reportutils"
-	"github.com/10gen/migration-verifier/internal/retry"
-	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/mongodb-labs/migration-verifier/internal/reportutils"
+	"github.com/mongodb-labs/migration-verifier/internal/retry"
+	"github.com/mongodb-labs/migration-verifier/internal/types"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"

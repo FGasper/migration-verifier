@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/keystring"
+	"github.com/mongodb-labs/migration-verifier/internal/keystring"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"go.mongodb.org/mongo-driver/bson"

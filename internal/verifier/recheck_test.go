@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/10gen/migration-verifier/internal/testutil"
-	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/mongodb-labs/migration-verifier/internal/testutil"
+	"github.com/mongodb-labs/migration-verifier/internal/types"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/partitions"
-	"github.com/10gen/migration-verifier/internal/types"
+	"github.com/mongodb-labs/migration-verifier/internal/partitions"
+	"github.com/mongodb-labs/migration-verifier/internal/types"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"

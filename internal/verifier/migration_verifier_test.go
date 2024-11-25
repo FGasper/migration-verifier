@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/10gen/migration-verifier/internal/partitions"
-	"github.com/10gen/migration-verifier/internal/testutil"
-	"github.com/10gen/migration-verifier/mslices"
+	"github.com/mongodb-labs/migration-verifier/internal/partitions"
+	"github.com/mongodb-labs/migration-verifier/internal/testutil"
+	"github.com/mongodb-labs/migration-verifier/mslices"
 	"github.com/cespare/permute/v2"
 	"github.com/rs/zerolog"
 	"github.com/samber/lo"
