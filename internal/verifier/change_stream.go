@@ -163,7 +163,9 @@ func (verifier *Verifier) readAndHandleOneChangeEventBatch(
 	ri *retry.Info,
 	cs *mongo.ChangeStream,
 ) error {
-	changeEventBatch, err := util.TryNextBatch[ParsedEvent](ctx, cs)
+	var changeEventBatch []ParsedEvent
+
+	err := util.TryNextBatch[ParsedEvent](ctx, cs, &changeEventBatch)
 	if err != nil {
 		return errors.Wrap(err, "change stream iteration failed")
 	}

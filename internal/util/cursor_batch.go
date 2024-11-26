@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
 )
@@ -16,31 +17,37 @@ type CursorLike interface {
 func TryNextBatch[T any](
 	ctx context.Context,
 	reader CursorLike,
-) ([]T, error) {
+	target *[]T,
+) error {
 	eventsRead := 0
-	var target []T
+
+	var newTarget []T
 
 	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = reader.RemainingBatchLength() > 0 {
 		gotEvent := reader.TryNext(ctx)
 
 		if reader.Err() != nil {
-			return nil, errors.Wrap(reader.Err(), "cursor iteration failed")
+			return errors.Wrap(reader.Err(), "failed to read cursor")
 		}
 
 		if !gotEvent {
 			break
 		}
 
-		if target == nil {
-			target = make([]T, reader.RemainingBatchLength()+1)
+		if newTarget == nil {
+			newTarget = make([]T, reader.RemainingBatchLength()+1)
 		}
 
-		if err := reader.Decode(&(target[eventsRead])); err != nil {
-			return nil, errors.Wrapf(err, "failed to decode to %T", target[0])
+		if err := reader.Decode(&newTarget[eventsRead]); err != nil {
+			return errors.Wrapf(err, "failed to decode from cursor to %T", newTarget[0])
 		}
 
 		eventsRead++
 	}
 
-	return target, nil
+	fmt.Printf("\n========== got docs: %+v\n\n", newTarget)
+
+	*target = newTarget
+
+	return nil
 }
