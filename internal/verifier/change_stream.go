@@ -163,38 +163,18 @@ func (verifier *Verifier) readAndHandleOneChangeEventBatch(
 	ri *retry.Info,
 	cs *mongo.ChangeStream,
 ) error {
-	eventsRead := 0
-	var changeEventBatch []ParsedEvent
-
-	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
-		gotEvent := cs.TryNext(ctx)
-
-		if cs.Err() != nil {
-			return errors.Wrap(cs.Err(), "change stream iteration failed")
-		}
-
-		if !gotEvent {
-			break
-		}
-
-		if changeEventBatch == nil {
-			changeEventBatch = make([]ParsedEvent, cs.RemainingBatchLength()+1)
-		}
-
-		if err := cs.Decode(&changeEventBatch[eventsRead]); err != nil {
-			return errors.Wrapf(err, "failed to decode change event to %T", changeEventBatch[eventsRead])
-		}
-
-		eventsRead++
+	changeEventBatch, err := util.TryNextBatch[ParsedEvent](ctx, cs)
+	if err != nil {
+		return errors.Wrap(err, "change stream iteration failed")
 	}
 
 	ri.IterationSuccess()
 
-	if eventsRead == 0 {
+	if len(changeEventBatch) == 0 {
 		return nil
 	}
 
-	err := verifier.HandleChangeStreamEvents(ctx, changeEventBatch)
+	err = verifier.HandleChangeStreamEvents(ctx, changeEventBatch)
 	if err != nil {
 		return errors.Wrap(err, "failed to handle change events")
 	}
