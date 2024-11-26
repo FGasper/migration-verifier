@@ -131,7 +131,14 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 				}
 
 				for _, doc := range batch {
-					handleNewDoc(doc, true)
+					err = handleNewDoc(doc, true)
+					if err != nil {
+						return errors.Wrapf(
+							err,
+							"failed to process source document with ID %v",
+							doc.Lookup("_id"),
+						)
+					}
 				}
 
 				if len(batch) == 0 {
@@ -160,7 +167,14 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 				}
 
 				for _, doc := range batch {
-					handleNewDoc(doc, false)
+					err = handleNewDoc(doc, false)
+					if err != nil {
+						return errors.Wrapf(
+							err,
+							"failed to process destination document with ID %v",
+							doc.Lookup("_id"),
+						)
+					}
 				}
 
 				if len(batch) == 0 {
