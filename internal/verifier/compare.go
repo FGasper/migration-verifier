@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -281,4 +282,16 @@ func (verifier *Verifier) getCursorsForTask(
 	err = eg.Wait()
 
 	return
+}
+
+func getMapKey(doc bson.Raw, fieldNames []string) string {
+	var keyBuffer bytes.Buffer
+	for _, keyName := range fieldNames {
+		value := doc.Lookup(keyName)
+		keyBuffer.Grow(1 + len(value.Value))
+		keyBuffer.WriteByte(byte(value.Type))
+		keyBuffer.Write(value.Value)
+	}
+
+	return keyBuffer.String()
 }
