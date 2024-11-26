@@ -2,7 +2,6 @@ package util
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/pkg/errors"
 )
@@ -44,8 +43,6 @@ func TryNextBatch[T any](
 
 		eventsRead++
 	}
-
-	fmt.Printf("\n========== got docs: %+v\n\n", newTarget)
 
 	*target = newTarget
 

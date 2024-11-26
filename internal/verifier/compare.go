@@ -6,9 +6,11 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/syncmap"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -22,8 +24,8 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 	error,
 ) {
 	results := []VerificationResult{}
-	var docCount types.DocumentCount
-	var byteCount types.ByteCount
+	var srcDocCount types.DocumentCount
+	var srcByteCount types.ByteCount
 
 	mapKeyFieldNames := make([]string, 1+len(task.QueryFilter.ShardKeys))
 	mapKeyFieldNames[0] = "_id"
@@ -31,8 +33,8 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 
 	namespace := task.QueryFilter.Namespace
 
-	srcCache := map[string]bson.Raw{}
-	dstCache := map[string]bson.Raw{}
+	srcCache := &syncmap.SyncMap[string, bson.Raw]{}
+	dstCache := &syncmap.SyncMap[string, bson.Raw]{}
 
 	// This is the core document-handling logic. It either:
 	//
@@ -42,9 +44,11 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 	handleNewDoc := func(doc bson.Raw, isSrc bool) error {
 		mapKey := getMapKey(doc, mapKeyFieldNames)
 
-		var ourMap, theirMap map[string]bson.Raw
+		var ourMap, theirMap *syncmap.SyncMap[string, bson.Raw]
 
 		if isSrc {
+			srcDocCount++
+			srcByteCount += types.ByteCount(len(doc))
 			ourMap = srcCache
 			theirMap = dstCache
 		} else {
@@ -53,7 +57,7 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 		}
 		// See if we've already cached a document with this
 		// mapKey from the other channel.
-		theirDoc, exists := theirMap[mapKey]
+		theirDoc, exists := theirMap.Load(mapKey)
 
 		// If there is no such cached document, then cache the newly-received
 		// document in our map then proceed to the next document.
@@ -61,14 +65,14 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 		// (We'll remove the cache entry when/if the other channel yields a
 		// document with the same mapKey.)
 		if !exists {
-			ourMap[mapKey] = doc
+			ourMap.Store(mapKey, doc)
 			return nil
 		}
 
 		// We have two documents! First we remove the cache entry. This saves
 		// memory, but more importantly, it lets us know, once we exhaust the
 		// channels, which documents were missing on one side or the other.
-		delete(theirMap, mapKey)
+		theirMap.Delete(mapKey)
 
 		// Now we determine which document came from whom.
 		var srcDoc, dstDoc bson.Raw
@@ -178,7 +182,43 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 		}
 	}
 
-	return results, docCount, byteCount, nil
+	// At this point, any documents left in the cache maps are simply
+	// missing on the other side. We add results for those.
+
+	// We might as well pre-grow the slice:
+	results = slices.Grow(results, srcCache.Len()+dstCache.Len())
+
+	srcCache.Range(func(_ string, doc bson.Raw) bool {
+		results = append(
+			results,
+			VerificationResult{
+				ID:        doc.Lookup("_id"),
+				Details:   Missing,
+				Cluster:   ClusterTarget,
+				NameSpace: namespace,
+				dataSize:  len(doc),
+			},
+		)
+
+		return true
+	})
+
+	dstCache.Range(func(_ string, doc bson.Raw) bool {
+		results = append(
+			results,
+			VerificationResult{
+				ID:        doc.Lookup("_id"),
+				Details:   Missing,
+				Cluster:   ClusterSource,
+				NameSpace: namespace,
+				dataSize:  len(doc),
+			},
+		)
+
+		return true
+	})
+
+	return results, srcDocCount, srcByteCount, nil
 }
 
 func (verifier *Verifier) getCursorsForTask(

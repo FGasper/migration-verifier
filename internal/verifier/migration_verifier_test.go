@@ -1439,7 +1439,7 @@ func (suite *IntegrationTestSuite) TestVerifierWithFilter() {
 	status := waitForTasks()
 	suite.Require().Greater(status.CompletedTasks, 1)
 	suite.Require().Greater(status.TotalTasks, 1)
-	suite.Require().Equal(status.FailedTasks, 0)
+	suite.Require().Equal(status.FailedTasks, 0, "should be no failed tasks (%+v)", status)
 
 	// Insert another document that is not in the filter.
 	// This should trigger a recheck despite being outside the filter.
