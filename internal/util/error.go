@@ -258,12 +258,10 @@ func hasTransientErrorCode(err error) bool {
 
 	// Now check whether any of the transient error codes appears
 	// in the error.
-	serverErr, isServerErr := err.(mongo.ServerError)
-
-	return isServerErr && lo.SomeBy(
+	return lo.SomeBy(
 		transientErrorCodes.ToSlice(),
 		func(code int) bool {
-			return mmongo.ErrorHasCode(serverErr, code)
+			return mmongo.ErrorHasCode(err, code)
 		},
 	)
 }
