@@ -103,7 +103,7 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 	})
 
 	// Start the worker threads.
-	for i := 0; i < verifier.numWorkers; i++ {
+	for i := range verifier.numWorkers {
 		eg.Go(func() error {
 			return errors.Wrapf(
 				verifier.work(ctx, i),
@@ -111,6 +111,7 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 				i,
 			)
 		})
+
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -329,7 +330,18 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 			verifier.logger.Debug().
 				Msg("Received test's signal. Continuing.")
 		}
-		time.Sleep(verifier.generationPauseDelayMillis * time.Millisecond)
+
+		pauseDuration := verifier.generationPauseDelayMillis * time.Millisecond
+		err = mtime.Sleep(ctx, pauseDuration)
+		if err != nil {
+			return errors.Wrapf(
+				err,
+				"interrupted during %s wait after generation %d",
+				pauseDuration,
+				verifier.generation,
+			)
+		}
+
 		verifier.mux.Lock()
 		if verifier.lastGeneration {
 			verifier.mux.Unlock()
