@@ -191,10 +191,7 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 		return nil
 	}
 
-	dbNames := make([]string, len(batch.events))
-	collNames := make([]string, len(batch.events))
-	docIDs := make([]any, len(batch.events))
-	dataSizes := make([]int, len(batch.events))
+	rechecks := make([]recheckToInsert, len(batch.events))
 
 	latestTimestamp := primitive.Timestamp{}
 
@@ -242,17 +239,22 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 			panic(fmt.Sprintf("unknown event origin: %s", eventOrigin))
 		}
 
-		dbNames[i] = srcDBName
-		collNames[i] = srcCollName
-		docIDs[i] = changeEvent.DocKey.ID
+		var dataSize int
 
 		if changeEvent.FullDocument == nil {
 			// This happens for deletes and for some updates.
 			// The document is probably, but not necessarily, deleted.
-			dataSizes[i] = fauxDocSizeForDeleteEvents
+			dataSize = fauxDocSizeForDeleteEvents
 		} else {
 			// This happens for inserts, replaces, and most updates.
-			dataSizes[i] = len(changeEvent.FullDocument)
+			dataSize = len(changeEvent.FullDocument)
+		}
+
+		rechecks[i] = recheckToInsert{
+			dbName:   srcDBName,
+			collName: srcCollName,
+			docID:    changeEvent.DocKey.ID,
+			dataSize: dataSize,
 		}
 
 		if err := eventRecorder.AddEvent(&changeEvent); err != nil {
@@ -270,13 +272,13 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 
 	verifier.logger.Debug().
 		Str("origin", string(eventOrigin)).
-		Int("count", len(docIDs)).
+		Int("count", len(rechecks)).
 		Any("latestTimestamp", latestTimestamp).
 		Time("latestTimestampTime", latestTimestampTime).
 		Stringer("lag", lag).
 		Msg("Persisting rechecks for change events.")
 
-	return verifier.insertRecheckDocs(ctx, dbNames, collNames, docIDs, dataSizes)
+	return verifier.insertRecheckDocs(ctx, rechecks)
 }
 
 // GetChangeStreamFilter returns an aggregation pipeline that filters

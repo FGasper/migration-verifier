@@ -23,7 +23,17 @@ const (
 	// This is the upper limit on the BSON-encoded length of document IDs
 	// per recheck task.
 	maxRecheckIdsLen = 12 * 1024 * 1024
+
+	// StackOverflow and ChatGPT suggest this:
+	maxInsertBatchSize = 1000
 )
+
+type recheckToInsert struct {
+	dbName   string
+	collName string
+	docID    any
+	dataSize int
+}
 
 // RecheckPrimaryKey stores the implicit type of recheck to perform
 // Currently, we only handle document mismatches/change stream updates,
@@ -52,15 +62,11 @@ type RecheckDoc struct {
 // InsertFailedCompareRecheckDocs is for inserting RecheckDocs based on failures during Check.
 func (verifier *Verifier) InsertFailedCompareRecheckDocs(
 	ctx context.Context,
-	namespace string, documentIDs []any, dataSizes []int) error {
+	namespace string,
+	documentIDs []any,
+	dataSizes []int,
+) error {
 	dbName, collName := SplitNamespace(namespace)
-
-	dbNames := make([]string, len(documentIDs))
-	collNames := make([]string, len(documentIDs))
-	for i := range documentIDs {
-		dbNames[i] = dbName
-		collNames[i] = collName
-	}
 
 	verifier.logger.Debug().
 		Int("count", len(documentIDs)).
@@ -68,10 +74,17 @@ func (verifier *Verifier) InsertFailedCompareRecheckDocs(
 
 	return verifier.insertRecheckDocs(
 		ctx,
-		dbNames,
-		collNames,
-		documentIDs,
-		dataSizes,
+		lo.Map(
+			documentIDs,
+			func(docID any, i int) recheckToInsert {
+				return recheckToInsert{
+					dbName:   dbName,
+					collName: collName,
+					docID:    docID,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
 	)
 }
 
@@ -93,41 +106,35 @@ func splitToChunks[T any, Slice ~[]T](elements Slice, numChunks int) []Slice {
 
 func (verifier *Verifier) insertRecheckDocs(
 	ctx context.Context,
-	dbNames []string,
-	collNames []string,
-	documentIDs []any,
-	dataSizes []int,
+	rechecks []recheckToInsert,
 ) error {
 	verifier.mux.Lock()
 	defer verifier.mux.Unlock()
 
 	generation, _ := verifier.getGenerationWhileLocked()
 
-	docIDIndexes := lo.Range(len(documentIDs))
-	indexesPerThread := splitToChunks(docIDIndexes, verifier.numWorkers)
+	recheckBatches := lo.Chunk(rechecks, maxInsertBatchSize)
 
 	eg, groupCtx := contextplus.ErrGroup(ctx)
 
-	for _, curThreadIndexes := range indexesPerThread {
-		curThreadIndexes := curThreadIndexes
+	for _, recheckBatch := range recheckBatches {
+		models := lo.Map(
+			recheckBatch,
+			func(recheck recheckToInsert, _ int) mongo.WriteModel {
+				return mongo.NewInsertOneModel().
+					SetDocument(RecheckDoc{
+						PrimaryKey: RecheckPrimaryKey{
+							Generation:        generation,
+							SrcDatabaseName:   recheck.dbName,
+							SrcCollectionName: recheck.collName,
+							DocumentID:        recheck.docID,
+						},
+						DataSize: recheck.dataSize,
+					})
+			},
+		)
 
 		eg.Go(func() error {
-			models := make([]mongo.WriteModel, len(curThreadIndexes))
-			for m, i := range curThreadIndexes {
-				recheckDoc := RecheckDoc{
-					PrimaryKey: RecheckPrimaryKey{
-						Generation:        generation,
-						SrcDatabaseName:   dbNames[i],
-						SrcCollectionName: collNames[i],
-						DocumentID:        documentIDs[i],
-					},
-					DataSize: dataSizes[i],
-				}
-
-				models[m] = mongo.NewInsertOneModel().
-					SetDocument(recheckDoc)
-			}
-
 			retryer := retry.New()
 			err := retryer.WithCallback(
 				func(retryCtx context.Context, _ *retry.FuncInfo) error {
@@ -173,14 +180,14 @@ func (verifier *Verifier) insertRecheckDocs(
 		return errors.Wrapf(
 			err,
 			"failed to persist %d recheck(s) for generation %d",
-			len(documentIDs),
+			len(rechecks),
 			generation,
 		)
 	}
 
 	verifier.logger.Debug().
 		Int("generation", generation).
-		Int("count", len(documentIDs)).
+		Int("count", len(rechecks)).
 		Msg("Persisted rechecks.")
 
 	return nil

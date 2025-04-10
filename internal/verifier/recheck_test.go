@@ -514,13 +514,18 @@ func insertRecheckDocs(
 	documentIDs []any,
 	dataSizes []int,
 ) error {
-	dbNames := make([]string, len(documentIDs))
-	collNames := make([]string, len(documentIDs))
-
-	for i := range documentIDs {
-		dbNames[i] = dbName
-		collNames[i] = collName
-	}
-
-	return verifier.insertRecheckDocs(ctx, dbNames, collNames, documentIDs, dataSizes)
+	return verifier.insertRecheckDocs(
+		ctx,
+		lo.Map(
+			documentIDs,
+			func(docID any, i int) recheckToInsert {
+				return recheckToInsert{
+					dbName:   dbName,
+					collName: collName,
+					docID:    docID,
+					dataSize: dataSizes[i],
+				}
+			},
+		),
+	)
 }
