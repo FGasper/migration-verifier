@@ -337,7 +337,14 @@ func (verifier *Verifier) SetMetaURI(ctx context.Context, uri string) error {
 }
 
 func (verifier *Verifier) AddMetaIndexes(ctx context.Context) error {
-	model := mongo.IndexModel{Keys: bson.M{"generation": 1}}
+	model := mongo.IndexModel{
+		// Index on both `generation` and `status` so that we optimize the
+		// query to find the next task.
+		Keys: bson.D{
+			{"generation", 1},
+			{"status", 1},
+		},
+	}
 	_, err := verifier.verificationTaskCollection().Indexes().CreateOne(ctx, model)
 	if err != nil {
 		return err
