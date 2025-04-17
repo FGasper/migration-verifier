@@ -247,11 +247,6 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 
 	verifier.logger.Debug().Msg("Starting Check")
 
-	verifier.phase = Check
-	defer func() {
-		verifier.phase = Idle
-	}()
-
 	ceHandlerGroup, groupCtx := contextplus.ErrGroup(ctx)
 	for _, csReader := range []*ChangeStreamReader{verifier.srcChangeStreamReader, verifier.dstChangeStreamReader} {
 		if csReader.changeStreamRunning {
@@ -374,7 +369,6 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter map[string]any
 			verifier.lastGeneration = true
 		}
 		verifier.generation++
-		verifier.phase = Recheck
 
 		// Generation of recheck tasks can partial-fail. The following will
 		// cause a full redo in that case, which is inefficient but simple.

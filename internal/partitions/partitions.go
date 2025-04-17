@@ -3,7 +3,6 @@ package partitions
 import (
 	"context"
 	"fmt"
-	"math/rand"
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/reportutils"
@@ -68,13 +67,6 @@ const (
 	defaultPartitionSizeInBytes = 400 * 1024 * 1024 // = 400 MB
 )
 
-// Replicator contains the id of a mongosync replicator.
-// It is used here to avoid changing the interface of partitioning (from the mongosync version)
-// overmuch.
-type Replicator struct {
-	ID string `bson:"id"`
-}
-
 // Partitions is a slice of partitions.
 type Partitions struct {
 	logger     *logger.Logger
@@ -121,7 +113,6 @@ func PartitionCollectionWithSize(
 	ctx context.Context,
 	uuidEntry *uuidutil.NamespaceAndUUID,
 	srcClient *mongo.Client,
-	replicatorList []Replicator,
 	subLogger *logger.Logger,
 	partitionSizeInBytes int64,
 	globalFilter map[string]any,
@@ -140,7 +131,6 @@ func PartitionCollectionWithSize(
 		ctx,
 		uuidEntry,
 		srcClient,
-		replicatorList,
 		defaultSampleRate,
 		defaultSampleMinNumDocs,
 		partitionSizeInBytes,
@@ -159,7 +149,6 @@ func PartitionCollectionWithSize(
 			ctx,
 			uuidEntry,
 			srcClient,
-			replicatorList,
 			defaultSampleRate,
 			defaultSampleMinNumDocs,
 			partitionSizeInBytes,
@@ -179,7 +168,6 @@ func PartitionCollectionWithParameters(
 	ctx context.Context,
 	uuidEntry *uuidutil.NamespaceAndUUID,
 	srcClient *mongo.Client,
-	replicatorList []Replicator,
 	sampleRate float64,
 	sampleMinNumDocs int,
 	partitionSizeInBytes int64,
@@ -292,9 +280,6 @@ func PartitionCollectionWithParameters(
 			Msg("_id bounds should outnumber partitions by 1.")
 	}
 
-	// Choose a random index to start to avoid over-assigning partitions to a specific replicator.
-	// rand.Int() generates non-negative integers only.
-	replIndex := rand.Int() % len(replicatorList)
 	subLogger.Debug().
 		Int("numPartitions", len(allIDBounds)-1).
 		Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
@@ -306,9 +291,8 @@ func PartitionCollectionWithParameters(
 
 	for i := 0; i < len(allIDBounds)-1; i++ {
 		partitionKey := PartitionKey{
-			SourceUUID:  uuidEntry.UUID,
-			MongosyncID: replicatorList[replIndex].ID,
-			Lower:       allIDBounds[i],
+			SourceUUID: uuidEntry.UUID,
+			Lower:      allIDBounds[i],
 		}
 		partition := &Partition{
 			Key:      partitionKey,
@@ -317,8 +301,6 @@ func PartitionCollectionWithParameters(
 			IsCapped: isCapped,
 		}
 		partitions = append(partitions, partition)
-
-		replIndex = (replIndex + 1) % len(replicatorList)
 	}
 
 	return partitions, types.DocumentCount(collDocCount), types.ByteCount(collSizeInBytes), nil
@@ -576,10 +558,10 @@ func getMidIDBounds(
 
 	// We sample the lesser of 4% of a collection, or 10x the number of partitions.
 	// See the constant definitions at the top of this file for rationale.
-	numDocsToSample := int64(sampleRate * float64(collDocCount))
-	if numDocsToSample > int64(defaultMaxNumDocsToSamplePerPartition*numPartitions) {
-		numDocsToSample = int64(defaultMaxNumDocsToSamplePerPartition * numPartitions)
-	}
+	numDocsToSample := min(
+		int64(sampleRate*float64(collDocCount)),
+		int64(defaultMaxNumDocsToSamplePerPartition*numPartitions),
+	)
 
 	// INTEGRATION TEST ONLY. We sample all docs in a collection
 	// to perform a collection scan and get deterministic results.
