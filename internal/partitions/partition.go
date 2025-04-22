@@ -111,6 +111,8 @@ func (p *Partition) GetAggregationStages(
 			pl = append(pl, bson.D{{"$match", opt.Value}})
 		case "sort":
 			pl = append(pl, bson.D{{"$sort", opt.Value}})
+		case "hint":
+			// do nothing
 		default:
 			panic("Unknown find opt: " + opt.Key)
 		}
