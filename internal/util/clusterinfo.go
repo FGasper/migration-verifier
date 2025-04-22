@@ -58,7 +58,7 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client) (bool, error) {
 	operator := "$_internalKeyStringValue"
 
-	_, err := client.Database("x").Collection("x").Aggregate(
+	cursor, err := client.Database("x").Collection("x").Aggregate(
 		ctx,
 		mongo.Pipeline{
 			{{"$addFields", bson.D{
@@ -68,8 +68,16 @@ func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client
 					}},
 				}},
 			}}},
+			{{"$limit", 1}},
 		},
 	)
+
+	if err == nil {
+		// Sharded clusters don’t detect invalid pipeline operator
+		// until we actually iterate the cursor.
+		cursor.Next(ctx)
+		err = cursor.Err()
+	}
 
 	if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
 		return false, nil
