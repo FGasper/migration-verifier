@@ -467,50 +467,6 @@ func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A)
 	return append(predicates, verifier.globalFilter)
 }
 
-func (verifier *Verifier) getDocumentsCursor(ctx context.Context, collection *mongo.Collection, clusterInfo *util.ClusterInfo,
-	startAtTs *primitive.Timestamp, task *VerificationTask) (*mongo.Cursor, error) {
-	var findOptions bson.D
-	runCommandOptions := options.RunCmd()
-	var andPredicates bson.A
-
-	if len(task.Ids) > 0 {
-		andPredicates = append(andPredicates, bson.D{{"_id", bson.M{"$in": task.Ids}}})
-		andPredicates = verifier.maybeAppendGlobalFilterToPredicates(andPredicates)
-		findOptions = bson.D{
-			bson.E{"filter", bson.D{{"$and", andPredicates}}},
-		}
-	} else {
-		findOptions = task.QueryFilter.Partition.GetFindOptions(clusterInfo, verifier.maybeAppendGlobalFilterToPredicates(andPredicates))
-	}
-	if verifier.readPreference.Mode() != readpref.PrimaryMode {
-		runCommandOptions = runCommandOptions.SetReadPreference(verifier.readPreference)
-		if startAtTs != nil {
-
-			// We never want to read before the change stream start time,
-			// or for the last generation, the change stream end time.
-			findOptions = append(
-				findOptions,
-				bson.E{"readConcern", bson.D{
-					{"afterClusterTime", *startAtTs},
-				}},
-			)
-		}
-	}
-	findCmd := append(bson.D{{"find", collection.Name()}}, findOptions...)
-
-	// Suppress this log for recheck tasks because the list of IDs can be
-	// quite long.
-	if len(task.Ids) == 0 {
-		verifier.logger.Debug().
-			Any("task", task.PrimaryKey).
-			Str("findCmd", fmt.Sprintf("%s", findCmd)).
-			Str("options", fmt.Sprintf("%v", *runCommandOptions)).
-			Msg("getDocuments findCmd.")
-	}
-
-	return collection.Database().RunCommandCursor(ctx, findCmd, runCommandOptions)
-}
-
 func mismatchResultsToVerificationResults(mismatch *MismatchDetails, srcClientDoc, dstClientDoc bson.Raw, namespace string, id any, fieldPrefix string) (results []VerificationResult) {
 	for _, field := range mismatch.missingFieldOnSrc {
 		result := VerificationResult{

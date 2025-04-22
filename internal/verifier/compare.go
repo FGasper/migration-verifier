@@ -3,15 +3,21 @@ package verifier
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mbson"
+	"github.com/10gen/migration-verifier/mslices"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"golang.org/x/exp/slices"
 )
 
@@ -105,7 +111,19 @@ func (verifier *Verifier) compareDocsFromChannels(
 	// b) compares the new doc against its previously-received, cached
 	//    counterpart and records any mismatch.
 	handleNewDoc := func(doc bson.Raw, isSrc bool) error {
-		mapKey := getMapKey(doc, mapKeyFieldNames)
+		var mapKey string
+
+		if verifier.shouldCompareFullDocuments() {
+			mapKey = getMapKey(doc, mapKeyFieldNames)
+		} else {
+			found, err := mbson.RawLookup(doc, &mapKey, "docKey")
+			if err != nil {
+				return errors.Wrapf(err, "failed to extract %#q", "docKey")
+			}
+			if !found {
+				return errors.Errorf("No %#q found in document: %+v", "docKey", doc)
+			}
+		}
 
 		var ourMap, theirMap map[string]bson.Raw
 
@@ -373,6 +391,109 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 	}
 
 	return srcChannel, dstChannel, readSrcCallback, readDstCallback
+}
+
+func (verifier *Verifier) getDocumentsCursor(
+	ctx context.Context,
+	collection *mongo.Collection,
+	clusterInfo *util.ClusterInfo,
+	startAtTs *primitive.Timestamp,
+	task *VerificationTask,
+) (*mongo.Cursor, error) {
+	runCommandOptions := options.RunCmd()
+	var andPredicates bson.A
+
+	if len(task.Ids) > 0 {
+		andPredicates = append(andPredicates, bson.D{{"_id", bson.M{"$in": task.Ids}}})
+	}
+	andPredicates = verifier.maybeAppendGlobalFilterToPredicates(andPredicates)
+
+	var cmd bson.D
+	var cmdOpts bson.D
+
+	if verifier.readPreference.Mode() != readpref.PrimaryMode {
+		runCommandOptions = runCommandOptions.SetReadPreference(verifier.readPreference)
+
+		if startAtTs != nil {
+
+			// We never want to read before the change stream start time,
+			// or for the last generation, the change stream end time.
+			cmdOpts = append(
+				cmdOpts,
+				bson.E{"readConcern", bson.D{
+					{"afterClusterTime", *startAtTs},
+				}},
+			)
+		}
+	}
+
+	if verifier.shouldCompareFullDocuments() {
+		var findOptions bson.D
+
+		if len(task.Ids) > 0 {
+			findOptions = bson.D{
+				bson.E{"filter", bson.D{{"$and", andPredicates}}},
+			}
+		} else {
+			findOptions = task.QueryFilter.Partition.GetFindOptions(clusterInfo, verifier.maybeAppendGlobalFilterToPredicates(nil))
+		}
+
+		findOptions = append(findOptions, cmdOpts...)
+
+		cmd = append(bson.D{{"find", collection.Name()}}, findOptions...)
+	} else {
+		var pl mongo.Pipeline
+
+		if len(task.Ids) > 0 {
+			pl = mongo.Pipeline{
+				{{"$match", bson.D{{"$and", andPredicates}}}},
+			}
+		} else {
+			pl = task.QueryFilter.Partition.GetAggregationStages(
+				clusterInfo,
+				verifier.maybeAppendGlobalFilterToPredicates(nil),
+				task.QueryFilter.ShardKeys,
+			)
+		}
+
+		cmd = append(
+			bson.D{
+				{"aggregate", collection.Name()},
+				{"pipeline", pl},
+			},
+			cmdOpts...,
+		)
+	}
+
+	// Suppress this log for recheck tasks because the list of IDs can be
+	// quite long.
+	if len(task.Ids) == 0 {
+		verifier.logger.Debug().
+			Any("task", task.PrimaryKey).
+			Str("cmd", fmt.Sprintf("%s", cmd)).
+			Str("options", fmt.Sprintf("%v", *runCommandOptions)).
+			Msg("getDocuments command.")
+	}
+
+	return collection.Database().RunCommandCursor(ctx, cmd, runCommandOptions)
+}
+
+func (v *Verifier) shouldCompareFullDocuments() bool {
+	if v.ignoreBSONFieldOrder {
+		return true
+	}
+
+	for _, clusterInfo := range mslices.Of(v.srcClusterInfo, v.dstClusterInfo) {
+		if clusterInfo.VersionArray[0] < 4 {
+			return true
+		}
+
+		if clusterInfo.VersionArray[0] == 4 && clusterInfo.VersionArray[1] < 4 {
+			return true
+		}
+	}
+
+	return false
 }
 
 func iterateCursorToChannel(

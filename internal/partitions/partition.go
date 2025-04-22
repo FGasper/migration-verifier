@@ -2,12 +2,14 @@ package partitions
 
 import (
 	"fmt"
+	"slices"
 
-	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // PartitionKey represents the _id of a partition document stored in the destination.
@@ -94,42 +96,52 @@ func (p *Partition) lowerBoundFromCurrent(current bson.Raw) (any, error) {
 	return nil, errors.New("could not find an '_id' element in the raw document")
 }
 
-// FindCmd constructs the Find command for reading documents from the partition. For capped
-// collections, the sort order will be `$natural` and the `lowerBound` argument is ignored. For
-// all other collections, the collection will be sorted by the `_id` field. The `lowerBound`
-// argument will determine the starting point for the find. If it is `nil`, then the value of
-// `p.Key.Lower`.
-//
-// This always constructs a non-type-bracketed find command.
-func (p *Partition) FindCmd(
-	// TODO (REP-1281)
-	logger *logger.Logger,
-	startAt *primitive.Timestamp,
-	// We only use this for testing.
-	batchSize ...int,
-) bson.D {
-	// Get the bounded query filter from the partition to be used in the Find command.
-	findCmd := bson.D{
-		{"find", p.Ns.Coll},
-		{"collectionUUID", p.Key.SourceUUID},
-		{"readConcern", bson.D{
-			{"level", "majority"},
-			// Start the cursor after the global state's ChangeStreamStartAtTs. Otherwise,
-			// there may be changes made by collection copy prior to change event application's
-			// start time that are not accounted for, leading to potential data
-			// inconsistencies.
-			{"afterClusterTime", startAt},
-		}},
-		// The cursor should not have a timeout.
-		{"noCursorTimeout", true},
-	}
-	if len(batchSize) > 0 {
-		findCmd = append(findCmd, bson.E{"batchSize", batchSize[0]})
-	}
-	findOptions := p.GetFindOptions(nil, nil)
-	findCmd = append(findCmd, findOptions...)
+func (p *Partition) GetAggregationOptions(
+	clusterInfo *util.ClusterInfo,
+	filterAndPredicates bson.A,
+	docKeyFields []string,
+) mongo.Pipeline {
+	findOpts := p.GetFindOptions(clusterInfo, filterAndPredicates)
 
-	return findCmd
+	pl := mongo.Pipeline{}
+
+	for _, opt := range findOpts {
+		switch opt.Key {
+		case "filter":
+			pl = append(pl, bson.D{{"$match", opt.Value}})
+		case "sort":
+			pl = append(pl, bson.D{{"$sort", opt.Value}})
+		default:
+			panic("Unknown find opt: " + opt.Key)
+		}
+	}
+
+	docKey := lo.Map(
+		docKeyFields,
+		func(fieldName string, _ int) string {
+			return "$$ROOT." + fieldName
+		},
+	)
+
+	pl = append(
+		pl,
+		bson.D{
+			{"$replaceRoot", bson.D{
+				{"newRoot", bson.D{
+					{"docKey", docKey},
+					{"hash", bson.D{
+						{"$toHashedIndexKey", bson.D{
+							{"$_internalKeyStringValue", bson.D{
+								{"input", "$$ROOT"},
+							}},
+						}},
+					}},
+				}},
+			}},
+		},
+	)
+
+	return pl
 }
 
 // GetFindOptions returns only the options necessary to do a find on any given collection with this
@@ -165,6 +177,9 @@ func (p *Partition) GetFindOptions(clusterInfo *util.ClusterInfo, filterAndPredi
 				allowTypeBracketing = clusterInfo.VersionArray[0] < 5
 			}
 		}
+
+		filterAndPredicates = slices.Clone(filterAndPredicates)
+
 		if !allowTypeBracketing {
 			filterAndPredicates = append(filterAndPredicates, p.filterWithNoTypeBracketing())
 		} else {

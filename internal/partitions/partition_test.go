@@ -10,45 +10,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Test that a partion can generate a correct filter with a lower bound for collection copy.
-func (suite *UnitTestSuite) TestPartitionFindCmd() {
-	suite.Run("normal partition", func() {
-		partition, expectedFilter := makeTestPartition()
-		startAt := &primitive.Timestamp{42, 43}
-		expectedFind := bson.D{
-			{"find", partition.Ns.Coll},
-			{"collectionUUID", partition.Key.SourceUUID},
-			{"readConcern", bson.D{
-				{"level", "majority"},
-				{"afterClusterTime", startAt},
-			}},
-			{"noCursorTimeout", true},
-			{"sort", bson.D{{"_id", 1}}},
-			{"hint", bson.D{{"_id", 1}}},
-			{"filter", expectedFilter},
-		}
-		actual := partition.FindCmd(suite.Logger(), startAt)
-		assertBSONEqual(suite.T(), expectedFind, actual)
-	})
-	suite.Run("capped partition", func() {
-		partition := makeTestCappedPartition()
-		startAt := &primitive.Timestamp{42, 43}
-
-		expectedFind := bson.D{
-			{"find", partition.Ns.Coll},
-			{"collectionUUID", partition.Key.SourceUUID},
-			{"readConcern", bson.D{
-				{"level", "majority"},
-				{"afterClusterTime", startAt},
-			}},
-			{"noCursorTimeout", true},
-			{"sort", bson.D{{"$natural", 1}}},
-		}
-		actual := partition.FindCmd(suite.Logger(), startAt)
-		assertBSONEqual(suite.T(), expectedFind, actual)
-	})
-}
-
 func (suite *UnitTestSuite) TestPartitionLowerBoundFromCurrent() {
 	expectLowerBound := int32(5)
 	current := bson.D{bson.E{"_id", expectLowerBound}, {"anotherField", "hello"}}
