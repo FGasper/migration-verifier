@@ -558,7 +558,7 @@ func getMapKeyFromFull(doc bson.Raw, fieldNames []string) string {
 func getMapKeyFromHashed(doc bson.Raw) (string, error) {
 	idVal, err := doc.LookupErr("_id")
 	if err != nil {
-		// TODO fail
+		return "", errors.Wrapf(err, "failed to extract %#q", "_id")
 	}
 
 	keyBuffer := bytes.Buffer{}
@@ -568,23 +568,23 @@ func getMapKeyFromHashed(doc bson.Raw) (string, error) {
 
 	extras, err := doc.LookupErr("extra")
 	if err != nil {
-		// TODO
+		return "", errors.Wrapf(err, "failed to extract %#q", "extra")
 	}
 
 	extrasArr, isArray := extras.ArrayOK()
 	if !isArray {
-		// TODO fail
+		return "", errors.Errorf("%#q is %s, not an array", "extra", extras.Type)
 	}
 
 	els, err := extrasArr.Elements()
 	if err != nil {
-		// TODO
+		return "", errors.Wrapf(err, "failed to extract elements from %#q", "extra")
 	}
 
-	for _, el := range els {
+	for n, el := range els {
 		value, err := el.ValueErr()
 		if err != nil {
-			// TODO
+			return "", errors.Wrapf(err, "failed to parse %#q element %d’s value", "extra", n)
 		}
 
 		keyBuffer.Grow(1 + len(value.Value))
