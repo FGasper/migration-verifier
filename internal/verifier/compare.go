@@ -96,9 +96,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 	var srcDocCount types.DocumentCount
 	var srcByteCount types.ByteCount
 
-	mapKeyFieldNames := make([]string, 1+len(task.QueryFilter.ShardKeys))
-	mapKeyFieldNames[0] = "_id"
-	copy(mapKeyFieldNames[1:], task.QueryFilter.ShardKeys)
+	mapKeyFieldNames := task.QueryFilter.GetDocKeyFieldNames()
 
 	namespace := task.QueryFilter.Namespace
 
@@ -452,7 +450,7 @@ func (verifier *Verifier) getDocumentsCursor(
 			pl = task.QueryFilter.Partition.GetAggregationStages(
 				clusterInfo,
 				verifier.maybeAppendGlobalFilterToPredicates(nil),
-				task.QueryFilter.ShardKeys,
+				task.QueryFilter.GetDocKeyFieldNames(),
 			)
 		}
 
