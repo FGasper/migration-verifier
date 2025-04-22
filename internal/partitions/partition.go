@@ -96,7 +96,7 @@ func (p *Partition) lowerBoundFromCurrent(current bson.Raw) (any, error) {
 	return nil, errors.New("could not find an '_id' element in the raw document")
 }
 
-func (p *Partition) GetAggregationOptions(
+func (p *Partition) GetAggregationStages(
 	clusterInfo *util.ClusterInfo,
 	filterAndPredicates bson.A,
 	docKeyFields []string,
