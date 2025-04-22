@@ -83,6 +83,10 @@ func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client
 		return false, nil
 	}
 
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		err = nil
+	}
+
 	if err != nil {
 		return false, errors.Wrapf(err, "failed to determine support for %#q operator", operator)
 	}
