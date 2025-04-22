@@ -453,7 +453,7 @@ func (verifier *Verifier) getDocumentsCursor(
 			)
 		}
 
-		pl = append(pl, getDocHashAggStage(task.QueryFilter.GetDocKeyFieldNames()))
+		pl = append(pl, getDocHashAggStage(task.QueryFilter.ShardKeys))
 
 		cmd = append(
 			bson.D{
