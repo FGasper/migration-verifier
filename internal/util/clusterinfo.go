@@ -43,9 +43,19 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 		}
 	}
 
-	hasInternalKeyStringValue, err := getSupportsInternalKeyStringValue(ctx, client)
-	if err != nil {
-		return ClusterInfo{}, err
+	var hasInternalKeyStringValue bool
+
+	switch {
+	case va[0] < 4:
+		// Unsupported anyway, but hey.
+		fallthrough
+	case va[0] == 4 && va[1] < 4:
+		hasInternalKeyStringValue = false
+	default:
+		hasInternalKeyStringValue, err = getSupportsInternalKeyStringValue(ctx, client)
+		if err != nil {
+			return ClusterInfo{}, err
+		}
 	}
 
 	return ClusterInfo{
@@ -55,10 +65,12 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 	}, nil
 }
 
+// NB: This doesn’t work for server 4.2, but that version
+// never got $_internalKeyStringValue anyway.
 func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client) (bool, error) {
 	operator := "$_internalKeyStringValue"
 
-	cursor, err := client.Database("x").Collection("x").Aggregate(
+	_, err := client.Database("x").Collection("x").Aggregate(
 		ctx,
 		mongo.Pipeline{
 			{{"$addFields", bson.D{
@@ -71,13 +83,6 @@ func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client
 			{{"$limit", 1}},
 		},
 	)
-
-	if err == nil {
-		// Sharded clusters don’t detect invalid pipeline operator
-		// until we actually iterate the cursor.
-		cursor.Next(ctx)
-		err = cursor.Err()
-	}
 
 	if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
 		return false, nil
