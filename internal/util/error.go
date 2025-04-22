@@ -24,6 +24,7 @@ import (
 // that uses error codes.
 const (
 	LockFailedErrCode              = 107
+	InvalidPipelineOperatorErrCode = 168
 	SampleTooManyDuplicatesErrCode = 28799
 	CursorKilledErrCode            = 237
 	DuplicateKeyErrCode            = 11000

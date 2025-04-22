@@ -262,6 +262,13 @@ func handleArgs(ctx context.Context, cCtx *cli.Context) (*verifier.Verifier, err
 		return nil, err
 	}
 	v.SetFailureDisplaySize(cCtx.Int64(failureDisplaySize))
+
+	if reason, has := v.WhyCompareFullDocuments().Get(); has {
+		v.GetLogger().Warn().
+			Str("reason", reason).
+			Msg("Using full-document comparison mode. This is more network-intensive than document-hash comparison mode.")
+	}
+
 	return v, nil
 }
 

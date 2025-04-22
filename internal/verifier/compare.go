@@ -10,7 +10,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
-	"github.com/10gen/migration-verifier/mslices"
+	"github.com/10gen/migration-verifier/option"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
@@ -111,7 +111,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 	handleNewDoc := func(doc bson.Raw, isSrc bool) error {
 		var mapKey string
 
-		if verifier.shouldCompareFullDocuments() {
+		if verifier.WhyCompareFullDocuments().IsSome() {
 			mapKey = getMapKeyFromFull(doc, mapKeyFieldNames)
 		} else {
 			var err error
@@ -424,7 +424,7 @@ func (verifier *Verifier) getDocumentsCursor(
 		}
 	}
 
-	if verifier.shouldCompareFullDocuments() {
+	if verifier.WhyCompareFullDocuments().IsSome() {
 		var findOptions bson.D
 
 		if len(task.Ids) > 0 {
@@ -478,22 +478,24 @@ func (verifier *Verifier) getDocumentsCursor(
 	return collection.Database().RunCommandCursor(ctx, cmd, runCommandOptions)
 }
 
-func (v *Verifier) shouldCompareFullDocuments() bool {
+func (v *Verifier) WhyCompareFullDocuments() option.Option[string] {
+	// Compare full documents if:
+	// - ignoring BSON field order
+	// - either src or dst lacks $_internalKeyStringValue
+
 	if v.ignoreBSONFieldOrder {
-		return true
+		return option.Some("ignoring BSON field order")
 	}
 
-	for _, clusterInfo := range mslices.Of(v.srcClusterInfo, v.dstClusterInfo) {
-		if clusterInfo.VersionArray[0] < 4 {
-			return true
-		}
-
-		if clusterInfo.VersionArray[0] == 4 && clusterInfo.VersionArray[1] < 4 {
-			return true
-		}
+	if !v.srcClusterInfo.HasInternalKeyStringValue {
+		return option.Some("source is outdated")
 	}
 
-	return false
+	if !v.dstClusterInfo.HasInternalKeyStringValue {
+		return option.Some("destination is outdated")
+	}
+
+	return option.None[string]()
 }
 
 func getDocHashAggStage(extraDocKeyFields []string) bson.D {

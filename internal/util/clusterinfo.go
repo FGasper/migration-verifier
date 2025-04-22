@@ -5,6 +5,7 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/mbson"
+	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,8 +15,9 @@ import (
 type ClusterTopology string
 
 type ClusterInfo struct {
-	VersionArray []int
-	Topology     ClusterTopology
+	VersionArray              []int
+	Topology                  ClusterTopology
+	HasInternalKeyStringValue bool
 }
 
 const (
@@ -41,10 +43,43 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 		}
 	}
 
+	hasInternalKeyStringValue, err := getSupportsInternalKeyStringValue(ctx, client)
+	if err != nil {
+		return ClusterInfo{}, err
+	}
+
 	return ClusterInfo{
-		VersionArray: va,
-		Topology:     topology,
+		VersionArray:              va,
+		Topology:                  topology,
+		HasInternalKeyStringValue: hasInternalKeyStringValue,
 	}, nil
+}
+
+func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client) (bool, error) {
+	operator := "$_internalKeyStringValue"
+
+	_, err := client.Database("x").Collection("x").Aggregate(
+		ctx,
+		mongo.Pipeline{
+			{{"$addFields", bson.D{
+				{"x", bson.D{
+					{operator, bson.D{
+						{"input", ""},
+					}},
+				}},
+			}}},
+		},
+	)
+
+	if err != nil {
+		if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
+			return false, nil
+		}
+
+		return false, errors.Wrapf(err, "failed to determine support for %#q operator", operator)
+	}
+
+	return true, nil
 }
 
 func getVersionArray(ctx context.Context, client *mongo.Client) ([]int, error) {
