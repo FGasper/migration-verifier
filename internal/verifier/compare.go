@@ -10,9 +10,9 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
-	"github.com/10gen/migration-verifier/mbson"
 	"github.com/10gen/migration-verifier/mslices"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -112,14 +112,13 @@ func (verifier *Verifier) compareDocsFromChannels(
 		var mapKey string
 
 		if verifier.shouldCompareFullDocuments() {
-			mapKey = getMapKey(doc, mapKeyFieldNames)
+			mapKey = getMapKeyFromFull(doc, mapKeyFieldNames)
 		} else {
-			found, err := mbson.RawLookup(doc, &mapKey, "docKey")
+			var err error
+
+			mapKey, err = getMapKeyFromHashed(doc)
 			if err != nil {
-				return errors.Wrapf(err, "failed to extract %#q", "docKey")
-			}
-			if !found {
-				return errors.Errorf("No %#q found in document: %+v", "docKey", doc)
+				return errors.Wrapf(err, "failed to parse hashed")
 			}
 		}
 
@@ -449,15 +448,18 @@ func (verifier *Verifier) getDocumentsCursor(
 		} else {
 			pl = task.QueryFilter.Partition.GetAggregationStages(
 				clusterInfo,
-				verifier.maybeAppendGlobalFilterToPredicates(nil),
+				verifier.maybeAppendGlobalFilterToPredicates(andPredicates),
 				task.QueryFilter.GetDocKeyFieldNames(),
 			)
 		}
+
+		pl = append(pl, getDocHashAggStage(task.QueryFilter.GetDocKeyFieldNames()))
 
 		cmd = append(
 			bson.D{
 				{"aggregate", collection.Name()},
 				{"pipeline", pl},
+				{"cursor", bson.D{}},
 			},
 			cmdOpts...,
 		)
@@ -465,13 +467,13 @@ func (verifier *Verifier) getDocumentsCursor(
 
 	// Suppress this log for recheck tasks because the list of IDs can be
 	// quite long.
-	if len(task.Ids) == 0 {
-		verifier.logger.Debug().
-			Any("task", task.PrimaryKey).
-			Str("cmd", fmt.Sprintf("%s", cmd)).
-			Str("options", fmt.Sprintf("%v", *runCommandOptions)).
-			Msg("getDocuments command.")
-	}
+	//if len(task.Ids) == 0 {
+	verifier.logger.Debug().
+		Any("task", task.PrimaryKey).
+		Str("cmd", fmt.Sprintf("%s", cmd)).
+		Str("options", fmt.Sprintf("%v", *runCommandOptions)).
+		Msg("getDocuments command.")
+	//}
 
 	return collection.Database().RunCommandCursor(ctx, cmd, runCommandOptions)
 }
@@ -492,6 +494,31 @@ func (v *Verifier) shouldCompareFullDocuments() bool {
 	}
 
 	return false
+}
+
+func getDocHashAggStage(extraDocKeyFields []string) bson.D {
+	extraDocKey := lo.Map(
+		extraDocKeyFields,
+		func(fieldName string, _ int) string {
+			return "$$ROOT." + fieldName
+		},
+	)
+
+	return bson.D{
+		{"$replaceRoot", bson.D{
+			{"newRoot", bson.D{
+				{"_id", "$$ROOT._id"},
+				{"extra", extraDocKey},
+				{"hash", bson.D{
+					{"$toHashedIndexKey", bson.D{
+						{"$_internalKeyStringValue", bson.D{
+							{"input", "$$ROOT"},
+						}},
+					}},
+				}},
+			}},
+		}},
+	}
 }
 
 func iterateCursorToChannel(
@@ -516,7 +543,7 @@ func iterateCursorToChannel(
 	return errors.Wrap(cursor.Err(), "failed to iterate cursor")
 }
 
-func getMapKey(doc bson.Raw, fieldNames []string) string {
+func getMapKeyFromFull(doc bson.Raw, fieldNames []string) string {
 	var keyBuffer bytes.Buffer
 	for _, keyName := range fieldNames {
 		value := doc.Lookup(keyName)
@@ -526,4 +553,44 @@ func getMapKey(doc bson.Raw, fieldNames []string) string {
 	}
 
 	return keyBuffer.String()
+}
+
+func getMapKeyFromHashed(doc bson.Raw) (string, error) {
+	idVal, err := doc.LookupErr("_id")
+	if err != nil {
+		// TODO fail
+	}
+
+	keyBuffer := bytes.Buffer{}
+	keyBuffer.Grow(1 + len(idVal.Value))
+	keyBuffer.WriteByte(byte(idVal.Type))
+	keyBuffer.Write(idVal.Value)
+
+	extras, err := doc.LookupErr("extra")
+	if err != nil {
+		// TODO
+	}
+
+	extrasArr, isArray := extras.ArrayOK()
+	if !isArray {
+		// TODO fail
+	}
+
+	els, err := extrasArr.Elements()
+	if err != nil {
+		// TODO
+	}
+
+	for _, el := range els {
+		value, err := el.ValueErr()
+		if err != nil {
+			// TODO
+		}
+
+		keyBuffer.Grow(1 + len(value.Value))
+		keyBuffer.WriteByte(byte(value.Type))
+		keyBuffer.Write(value.Value)
+	}
+
+	return keyBuffer.String(), nil
 }

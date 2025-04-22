@@ -362,8 +362,10 @@ func (suite *IntegrationTestSuite) TestChangeStreamLag() {
 		verifierRunner.AwaitGenerationEnd(),
 	)
 
-	_, err := db.Collection("mycoll").InsertOne(ctx, bson.D{})
+	inserted, err := db.Collection("mycoll").InsertOne(ctx, bson.D{})
 	suite.Require().NoError(err)
+
+	suite.T().Logf("inserted: %+v", inserted)
 
 	// On sharded clusters sometimes the event hasn’t shown yet.
 	suite.Require().Eventually(

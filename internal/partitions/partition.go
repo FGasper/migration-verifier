@@ -6,7 +6,6 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/pkg/errors"
-	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -117,31 +116,6 @@ func (p *Partition) GetAggregationStages(
 			panic("Unknown find opt: " + opt.Key)
 		}
 	}
-
-	docKey := lo.Map(
-		docKeyFields,
-		func(fieldName string, _ int) string {
-			return "$$ROOT." + fieldName
-		},
-	)
-
-	pl = append(
-		pl,
-		bson.D{
-			{"$replaceRoot", bson.D{
-				{"newRoot", bson.D{
-					{"docKey", docKey},
-					{"hash", bson.D{
-						{"$toHashedIndexKey", bson.D{
-							{"$_internalKeyStringValue", bson.D{
-								{"input", "$$ROOT"},
-							}},
-						}},
-					}},
-				}},
-			}},
-		},
-	)
 
 	return pl
 }
