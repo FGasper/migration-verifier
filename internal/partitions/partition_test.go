@@ -1,8 +1,6 @@
 package partitions
 
 import (
-	"testing"
-
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,14 +131,4 @@ func makeTestCappedPartition() Partition {
 	partition, _ := makeTestPartition()
 	partition.IsCapped = true
 	return partition
-}
-
-func assertBSONEqual(t *testing.T, expected, actual any) {
-	expectedJSON, err := bson.MarshalExtJSONIndent(expected, false, false, "", "    ")
-	require.NoError(t, err)
-
-	actualJSON, err := bson.MarshalExtJSONIndent(actual, false, false, "", "    ")
-	require.NoError(t, err)
-
-	assert.Equal(t, string(expectedJSON), string(actualJSON))
 }
