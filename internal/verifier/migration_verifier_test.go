@@ -492,6 +492,13 @@ func TestVerifierCompareDocs(t *testing.T) {
 		compareFn   func(*testing.T, []VerificationResult)
 	}
 
+	verifier.srcClusterInfo = &util.ClusterInfo{
+		VersionArray: []int{4, 2},
+	}
+	verifier.dstClusterInfo = &util.ClusterInfo{
+		VersionArray: []int{4, 2},
+	}
+
 	compareTests := []compareTest{
 		{
 			label: "simple equality",

@@ -467,13 +467,13 @@ func (verifier *Verifier) getDocumentsCursor(
 
 	// Suppress this log for recheck tasks because the list of IDs can be
 	// quite long.
-	//if len(task.Ids) == 0 {
-	verifier.logger.Debug().
-		Any("task", task.PrimaryKey).
-		Str("cmd", fmt.Sprintf("%s", cmd)).
-		Str("options", fmt.Sprintf("%v", *runCommandOptions)).
-		Msg("getDocuments command.")
-	//}
+	if len(task.Ids) == 0 {
+		verifier.logger.Debug().
+			Any("task", task.PrimaryKey).
+			Str("cmd", fmt.Sprintf("%s", cmd)).
+			Str("options", fmt.Sprintf("%v", *runCommandOptions)).
+			Msg("getDocuments command.")
+	}
 
 	return collection.Database().RunCommandCursor(ctx, cmd, runCommandOptions)
 }
