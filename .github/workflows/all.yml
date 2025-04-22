@@ -22,6 +22,13 @@ jobs:
               srcConnStr: mongodb://localhost:27020,localhost:27021,localhost:27022
               dstConnStr: mongodb://localhost:27030,localhost:27031,localhost:27032
 
+          # Testing 4.4 without $_internalKeyStringValue
+          - mongodb_versions: [ '4.4.15', '6.0' ]
+            topology:
+              name: replset
+              srcConnStr: mongodb://localhost:27020,localhost:27021,localhost:27022
+              dstConnStr: mongodb://localhost:27030,localhost:27031,localhost:27032
+
 
         # versions are: source, destination
         mongodb_versions:
