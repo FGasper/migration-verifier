@@ -71,11 +71,11 @@ func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client
 		},
 	)
 
-	if err != nil {
-		if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
-			return false, nil
-		}
+	if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
+		return false, nil
+	}
 
+	if err != nil {
 		return false, errors.Wrapf(err, "failed to determine support for %#q operator", operator)
 	}
 

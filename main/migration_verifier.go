@@ -267,6 +267,9 @@ func handleArgs(ctx context.Context, cCtx *cli.Context) (*verifier.Verifier, err
 		v.GetLogger().Warn().
 			Str("reason", reason).
 			Msg("Using full-document comparison mode. This is more network-intensive than document-hash comparison mode.")
+	} else {
+		v.GetLogger().Info().
+			Msg("Using document-hash comparison mode for optimal network usage.")
 	}
 
 	return v, nil
