@@ -487,11 +487,11 @@ func (v *Verifier) WhyCompareFullDocuments() option.Option[string] {
 		return option.Some("ignoring BSON field order")
 	}
 
-	if !v.srcClusterInfo.HasInternalKeyStringValue {
+	if !v.srcClusterInfo.HasInternalKeyStringValue() {
 		return option.Some("source is outdated")
 	}
 
-	if !v.dstClusterInfo.HasInternalKeyStringValue {
+	if !v.dstClusterInfo.HasInternalKeyStringValue() {
 		return option.Some("destination is outdated")
 	}
 

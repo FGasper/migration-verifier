@@ -5,7 +5,6 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/mbson"
-	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
@@ -15,9 +14,8 @@ import (
 type ClusterTopology string
 
 type ClusterInfo struct {
-	VersionArray              []int
-	Topology                  ClusterTopology
-	HasInternalKeyStringValue bool
+	VersionArray []int
+	Topology     ClusterTopology
 }
 
 const (
@@ -43,62 +41,29 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 		}
 	}
 
-	var hasInternalKeyStringValue bool
-
-	/*
-		switch {
-		case va[0] < 4:
-			// Unsupported anyway, but hey.
-			fallthrough
-		case va[0] == 4 && va[1] < 4:
-			hasInternalKeyStringValue = false
-		default:
-	*/
-	hasInternalKeyStringValue, err = getSupportsInternalKeyStringValue(ctx, client)
-	if err != nil {
-		return ClusterInfo{}, err
-	}
-	//}
-
 	return ClusterInfo{
-		VersionArray:              va,
-		Topology:                  topology,
-		HasInternalKeyStringValue: hasInternalKeyStringValue,
+		VersionArray: va,
+		Topology:     topology,
 	}, nil
 }
 
-// NB: This doesn’t work for server 4.2, but that version
-// never got $_internalKeyStringValue anyway.
-func getSupportsInternalKeyStringValue(ctx context.Context, client *mongo.Client) (bool, error) {
-	operator := "$_internalKeyStringValue"
-
-	_, err := client.Database("x").Collection("x").Aggregate(
-		ctx,
-		mongo.Pipeline{
-			{{"$addFields", bson.D{
-				{"x", bson.D{
-					{operator, bson.D{
-						{"input", ""},
-					}},
-				}},
-			}}},
-			{{"$limit", 1}},
-		},
-	)
-
-	if mmongo.ErrorHasCode(err, InvalidPipelineOperatorErrCode) {
-		return false, nil
+func (ci ClusterInfo) HasInternalKeyStringValue() bool {
+	if ci.VersionArray[0] < 4 {
+		return false
 	}
 
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		err = nil
+	switch ci.VersionArray[0] {
+	case 4:
+		return ci.VersionArray[1] == 4 && ci.VersionArray[2] >= 29
+	case 5:
+		return ci.VersionArray[1] == 0 && ci.VersionArray[2] >= 25
+	case 6:
+		return ci.VersionArray[1] == 0 && ci.VersionArray[2] >= 14
+	case 7:
+		return ci.VersionArray[1] == 0 && ci.VersionArray[2] >= 6
+	default:
+		return true
 	}
-
-	if err != nil {
-		return false, errors.Wrapf(err, "failed to determine support for %#q operator", operator)
-	}
-
-	return true, nil
 }
 
 func getVersionArray(ctx context.Context, client *mongo.Client) ([]int, error) {
