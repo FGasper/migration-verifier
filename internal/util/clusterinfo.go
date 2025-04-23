@@ -45,18 +45,20 @@ func GetClusterInfo(ctx context.Context, logger *logger.Logger, client *mongo.Cl
 
 	var hasInternalKeyStringValue bool
 
-	switch {
-	case va[0] < 4:
-		// Unsupported anyway, but hey.
-		fallthrough
-	case va[0] == 4 && va[1] < 4:
-		hasInternalKeyStringValue = false
-	default:
-		hasInternalKeyStringValue, err = getSupportsInternalKeyStringValue(ctx, client)
-		if err != nil {
-			return ClusterInfo{}, err
-		}
+	/*
+		switch {
+		case va[0] < 4:
+			// Unsupported anyway, but hey.
+			fallthrough
+		case va[0] == 4 && va[1] < 4:
+			hasInternalKeyStringValue = false
+		default:
+	*/
+	hasInternalKeyStringValue, err = getSupportsInternalKeyStringValue(ctx, client)
+	if err != nil {
+		return ClusterInfo{}, err
 	}
+	//}
 
 	return ClusterInfo{
 		VersionArray:              va,
