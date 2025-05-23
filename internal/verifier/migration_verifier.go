@@ -736,6 +736,8 @@ func (verifier *Verifier) ProcessVerifyTask(ctx context.Context, workerNum int, 
 	err = verifier.UpdateVerificationTask(ctx, task)
 
 	if err != nil {
+		fmt.Printf("\nFailed task: %v\n\n", task)
+
 		return errors.Wrapf(
 			err,
 			"failed to persist task %s's new status (%#q)",
