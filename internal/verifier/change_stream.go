@@ -321,8 +321,8 @@ func (csr *ChangeStreamReader) GetChangeStreamFilter() (pipeline mongo.Pipeline)
 	return append(
 		pipeline,
 		bson.D{
-			{"$unset", []string{
-				"updateDescription",
+			{"$addFields", bson.D{
+				{"updateDescription", "$$REMOVE"},
 			}},
 		},
 	)
