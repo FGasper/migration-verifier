@@ -489,7 +489,7 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				panic(fmt.Sprintf("unknown type %T for upper bound", bound))
 			}
 
-			for !cursor.IsFinished() {
+			for {
 				batch := cursor.GetCurrentBatch()
 				ts, exists := cursor.GetExtra()["operationTime"]
 				if !exists {
@@ -539,16 +539,25 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 					panic("err " + err.Error())
 				}
 
+				if cursor.IsFinished() {
+					break
+				}
+
 				// TODO
 				if upperRecId, has := upperRecordId.Get(); has {
 					if recordID.AsInt64() > upperRecId {
+						// fmt.Printf("------------ query reached upper bound")
 						break
 					}
 				}
 
+				// fmt.Printf("=== src at record ID %d\n", recordID.AsInt64())
+
 				if err := cursor.GetNext(sctx); err != nil {
 					return errors.Wrapf(err, "reading more from source")
 				}
+
+				// fmt.Printf("=== got %d more docs\n", len(cursor.GetCurrentBatch()))
 
 				state.NoteSuccess("iterated cursor (got %d docs)", len(cursor.GetCurrentBatch()))
 			}
