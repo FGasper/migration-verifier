@@ -392,7 +392,7 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 	srcChannel := make(chan docWithTs)
 	dstChannel := make(chan docWithTs)
 
-	if task.QueryFilter.Partition.Natural {
+	if task.QueryFilter.Partition != nil && task.QueryFilter.Partition.Natural {
 		srcToDstChannel := make(chan []bson.Raw, 2)
 
 		readSrcCallback := func(ctx context.Context, state *retry.FuncInfo) error {
