@@ -158,9 +158,6 @@ func (verifier *Verifier) insertRecheckDocs(
 				len(models),
 			).Run(groupCtx, verifier.logger)
 
-			if err != nil {
-				fmt.Printf("rechecks: %+v", models)
-			}
 			return errors.Wrapf(err, "failed to persist %d recheck(s) for generation %d", len(models), generation)
 		})
 	}
@@ -176,7 +173,7 @@ func (verifier *Verifier) insertRecheckDocs(
 		)
 	}
 
-	verifier.logger.Debug().
+	verifier.logger.Trace().
 		Int("generation", generation).
 		Int("count", len(documentIDs)).
 		Msg("Persisted rechecks.")

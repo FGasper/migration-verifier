@@ -75,7 +75,10 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 		).
 		WithCallback(
 			func(ctx context.Context, fi *retry.FuncInfo) error {
-				return readDstCallback(ctx, fi)
+				err := readDstCallback(ctx, fi)
+				//fmt.Printf("xxxxxxx dst err: %+v\n\n", err)
+
+				return err
 			},
 			"reading from destination",
 		).
@@ -95,6 +98,14 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 			},
 			"comparing documents",
 		).Run(givenCtx, verifier.logger)
+
+	if err != nil {
+		panic("error!!! " + err.Error())
+	}
+
+	if len(results) > 0 {
+		panic(fmt.Sprintf("nonononono got mismatch: %+v", results))
+	}
 
 	return results, docCount, byteCount, err
 }
@@ -128,16 +139,22 @@ func (verifier *Verifier) compareDocsFromChannels(
 	// b) compares the new doc against its previously-received, cached
 	//    counterpart and records any mismatch.
 	handleNewDoc := func(curDocWithTs docWithTs, isSrc bool) error {
-		docKeyValues := lo.Map(
-			mapKeyFieldNames,
-			func(fieldName string, _ int) bson.RawValue {
-				return getDocKeyFieldFromComparison(
-					verifier.docCompareMethod,
-					curDocWithTs.doc,
-					fieldName,
-				)
-			},
-		)
+		var docKeyValues []bson.RawValue
+
+		for _, fieldName := range mapKeyFieldNames {
+			val, err := getDocKeyFieldFromComparison(
+				verifier.docCompareMethod,
+				curDocWithTs.doc,
+				fieldName,
+			)
+
+			if err != nil {
+				return errors.Wrapf(err, "getting %#q from doc %v", fieldName, curDocWithTs.doc)
+			}
+
+			docKeyValues = append(docKeyValues, val)
+		}
+
 		mapKey := getMapKey(docKeyValues)
 
 		var ourMap, theirMap map[string]docWithTs
@@ -215,6 +232,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 
 		if !srcClosed {
 			eg.Go(func() error {
+				//fmt.Printf(".... %d compare reading from source\n", workerNum)
 				var alive bool
 				select {
 				case <-egCtx.Done():
@@ -226,6 +244,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 					)
 				case srcDocWithTs, alive = <-srcChannel:
 					if !alive {
+						//fmt.Printf(".... %d src->compare closed\n", workerNum)
 						srcClosed = true
 						break
 					}
@@ -250,6 +269,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 
 		if !dstClosed {
 			eg.Go(func() error {
+				//fmt.Printf(".... %d compare reading from dst\n", workerNum)
 				var alive bool
 				select {
 				case <-egCtx.Done():
@@ -260,6 +280,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 						readTimeout,
 					)
 				case dstDocWithTs, alive = <-dstChannel:
+					//fmt.Printf(".... %d dst->compare closed\n", workerNum)
 					if !alive {
 						dstClosed = true
 						break
@@ -320,14 +341,19 @@ func (verifier *Verifier) compareDocsFromChannels(
 	results = slices.Grow(results, len(srcCache)+len(dstCache))
 
 	for _, docWithTs := range srcCache {
+		idVal, err := getDocKeyFieldFromComparison(
+			verifier.docCompareMethod,
+			docWithTs.doc,
+			"_id",
+		)
+		if err != nil {
+			return nil, 0, 0, errors.Wrapf(err, "getting %#q from src doc %v", "_id", docWithTs.doc)
+		}
+
 		results = append(
 			results,
 			VerificationResult{
-				ID: getDocKeyFieldFromComparison(
-					verifier.docCompareMethod,
-					docWithTs.doc,
-					"_id",
-				),
+				ID:           idVal,
 				Details:      Missing,
 				Cluster:      ClusterTarget,
 				NameSpace:    namespace,
@@ -338,14 +364,19 @@ func (verifier *Verifier) compareDocsFromChannels(
 	}
 
 	for _, docWithTs := range dstCache {
+		idVal, err := getDocKeyFieldFromComparison(
+			verifier.docCompareMethod,
+			docWithTs.doc,
+			"_id",
+		)
+		if err != nil {
+			return nil, 0, 0, errors.Wrapf(err, "getting %#q from dst doc %v", "_id", docWithTs.doc)
+		}
+
 		results = append(
 			results,
 			VerificationResult{
-				ID: getDocKeyFieldFromComparison(
-					verifier.docCompareMethod,
-					docWithTs.doc,
-					"_id",
-				),
+				ID:           idVal,
 				Details:      Missing,
 				Cluster:      ClusterSource,
 				NameSpace:    namespace,
@@ -362,12 +393,12 @@ func getDocKeyFieldFromComparison(
 	docCompareMethod DocCompareMethod,
 	doc bson.Raw,
 	fieldName string,
-) bson.RawValue {
+) (bson.RawValue, error) {
 	switch docCompareMethod {
 	case DocCompareBinary, DocCompareIgnoreOrder:
-		return doc.Lookup(fieldName)
+		return doc.LookupErr(fieldName)
 	case DocCompareToHashedIndexKey:
-		return doc.Lookup(docKeyInHashedCompare, fieldName)
+		return doc.LookupErr(docKeyInHashedCompare, fieldName)
 	default:
 		panic("bad doc compare method: " + docCompareMethod)
 	}
@@ -409,10 +440,25 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 
 			coll := verifier.srcClientCollection(task)
 
-			cmd := bson.D{
-				{"find", coll.Name()},
-				{"hint", bson.D{{"$natural", 1}}},
-				{"$_requestResumeToken", true},
+			var cmd bson.D
+			switch verifier.docCompareMethod {
+			case DocCompareToHashedIndexKey:
+				cmd = bson.D{
+					{"aggregate", coll.Name()},
+					{"hint", bson.D{{"$natural", 1}}},
+					{"$_requestResumeToken", true},
+					{"cursor", bson.D{}},
+					{"pipeline", transformPipelineForToHashedIndexKey(
+						mongo.Pipeline{},
+						task.QueryFilter.GetDocKeyFields(),
+					)},
+				}
+			case DocCompareBinary, DocCompareIgnoreOrder:
+				cmd = bson.D{
+					{"find", coll.Name()},
+					{"hint", bson.D{{"$natural", 1}}},
+					{"$_requestResumeToken", true},
+				}
 			}
 
 			switch bound := task.QueryFilter.Partition.Key.Lower.(type) {
@@ -456,15 +502,26 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				}
 
 				// Send the batch to the dst so it can read the docs.
-				srcToDstChannel <- batch
 
-				state.NoteSuccess("sent %batch to dst", len(batch))
+				err := chanutil.WriteWithDoneCheck(sctx, srcToDstChannel, batch)
+				if err != nil {
+					return err
+				}
+
+				state.NoteSuccess("sent %d-doc batch to dst", len(batch))
 
 				// Now send to the comparison thread.
 				for _, doc := range batch {
-					srcChannel <- docWithTs{
-						doc: doc,
-						ts:  primitive.Timestamp{ts_s, ts_i},
+					err := chanutil.WriteWithDoneCheck(
+						sctx,
+						srcChannel,
+						docWithTs{
+							doc: doc,
+							ts:  primitive.Timestamp{ts_s, ts_i},
+						},
+					)
+					if err != nil {
+						return err
 					}
 				}
 
@@ -496,11 +553,16 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				state.NoteSuccess("iterated cursor (got %d docs)", len(cursor.GetCurrentBatch()))
 			}
 
+			//fmt.Printf("======= src finished\n")
+
 			return nil
 		}
 
 		readDstCallback := func(ctx context.Context, state *retry.FuncInfo) error {
-			defer close(dstChannel)
+			defer func() {
+				//fmt.Printf("====== closing dst->compare\n")
+				close(dstChannel)
+			}()
 
 			sess, err := verifier.dstClient.StartSession()
 			if err != nil {
@@ -518,21 +580,27 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				ids := make([]bson.RawValue, 0, len(docsToRead))
 
 				for _, doc := range docsToRead {
-					id, err := doc.LookupErr("_id")
+					id, err := getDocKeyFieldFromComparison(verifier.docCompareMethod, doc, "_id")
 					if err != nil {
+						//fmt.Printf("----- dst err %v\n\n", err)
 						return errors.Wrapf(err, "finding _id in doc")
 					}
 
 					ids = append(ids, id)
 				}
 
-				cursor, err := coll.Find(
+				dupeTask := *task
+				dupeTask.Ids = lo.ToAnySlice(ids)
+
+				cursor, err := verifier.getDocumentsCursor(
 					sctx,
-					bson.D{
-						{"_id", bson.D{{"$in", ids}}},
-					},
+					coll,
+					verifier.dstClusterInfo,
+					verifier.srcChangeStreamReader.startAtTs,
+					&dupeTask,
 				)
 				if err != nil {
+					//fmt.Printf("xxxxx dst err %v\n\n", err)
 					return errors.Wrapf(err, "finding %d documents", len(ids))
 				}
 
@@ -544,9 +612,12 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				)
 
 				if err != nil {
+					//fmt.Printf("xxxxx dst iterate err %v\n\n", err)
 					return err
 				}
 			}
+
+			//fmt.Printf("------ dst saw srcToDstChannel closed\n")
 
 			return nil
 		}
@@ -674,8 +745,13 @@ func getMapKey(docKeyValues []bson.RawValue) string {
 	return keyBuffer.String()
 }
 
-func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collection *mongo.Collection, clusterInfo *util.ClusterInfo,
-	startAtTs *primitive.Timestamp, task *VerificationTask) (*mongo.Cursor, error) {
+func (verifier *Verifier) getDocumentsCursor(
+	ctx mongo.SessionContext,
+	collection *mongo.Collection,
+	clusterInfo *util.ClusterInfo,
+	startAtTs *primitive.Timestamp,
+	task *VerificationTask,
+) (*mongo.Cursor, error) {
 	var findOptions bson.D
 	runCommandOptions := options.RunCmd()
 	var andPredicates bson.A
@@ -696,7 +772,7 @@ func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collectio
 			aggOptions = bson.D{
 				{"pipeline", transformPipelineForToHashedIndexKey(
 					mongo.Pipeline{{{"$match", filter}}},
-					task,
+					task.QueryFilter.GetDocKeyFields(),
 				)},
 			}
 		default:
@@ -724,8 +800,8 @@ func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collectio
 				}
 
 				aggOptions[i].Value = transformPipelineForToHashedIndexKey(
-					aggOptions[i].Value.(mongo.Pipeline),
-					task,
+					aggOptions[i].Value.(mongo.Pipeline), // TODO doc filter
+					task.QueryFilter.GetDocKeyFields(),
 				)
 
 				break
@@ -791,14 +867,14 @@ func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collectio
 
 func transformPipelineForToHashedIndexKey(
 	in mongo.Pipeline,
-	task *VerificationTask,
+	docKeyFields []string,
 ) mongo.Pipeline {
 	return append(
 		slices.Clone(in),
 		bson.D{{"$replaceWith", bson.D{
 			// Single-letter field names minimize the document size.
 			{docKeyInHashedCompare, bson.D(lo.Map(
-				task.QueryFilter.GetDocKeyFields(),
+				docKeyFields,
 				func(f string, _ int) bson.E {
 					return bson.E{f, "$$ROOT." + f}
 				},
@@ -822,9 +898,14 @@ func (verifier *Verifier) compareOneDocument(srcClientDoc, dstClientDoc bson.Raw
 	}
 
 	if verifier.docCompareMethod == DocCompareToHashedIndexKey {
+		idVal, err := getDocKeyFieldFromComparison(verifier.docCompareMethod, srcClientDoc, "_id")
+		if err != nil {
+			return nil, errors.Wrapf(err, "extracting %#q from doc %v", "_id", srcClientDoc)
+		}
+
 		// With hash comparison, mismatches are opaque.
 		return []VerificationResult{{
-			ID:        getDocKeyFieldFromComparison(verifier.docCompareMethod, srcClientDoc, "_id"),
+			ID:        idVal,
 			Details:   Mismatch,
 			Cluster:   ClusterTarget,
 			NameSpace: namespace,

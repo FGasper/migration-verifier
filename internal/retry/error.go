@@ -34,6 +34,9 @@ type errgroupErr struct {
 	errFromCallback error
 }
 
+var _ error = errgroupErr{}
+var _ error = &errgroupErr{}
+
 func (ege errgroupErr) Error() string {
 	return fmt.Sprintf("func %d failed: %v", ege.funcNum, ege.errFromCallback)
 }

@@ -268,7 +268,7 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 	latestTimestampTime := time.Unix(int64(latestTimestamp.T), 0)
 	lag := time.Unix(int64(batch.clusterTime.T), 0).Sub(latestTimestampTime)
 
-	verifier.logger.Debug().
+	verifier.logger.Trace().
 		Str("origin", string(eventOrigin)).
 		Int("count", len(docIDs)).
 		Any("latestTimestamp", latestTimestamp).
@@ -806,7 +806,7 @@ func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Contex
 	if err == nil {
 		ts, err := extractTimestampFromResumeToken(token)
 
-		logEvent := csr.logger.Debug()
+		logEvent := csr.logger.Trace()
 
 		if err == nil {
 			logEvent = addTimestampToLogEvent(ts, logEvent)

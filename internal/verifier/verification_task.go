@@ -102,7 +102,7 @@ func (t *VerificationTask) augmentLogWithDetails(evt *zerolog.Event) {
 }
 
 func (t *VerificationTask) IsRecheck() bool {
-	return t.Generation > 0
+	return t.Ids != nil
 }
 
 func (verifier *Verifier) insertCollectionVerificationTask(
