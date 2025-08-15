@@ -234,18 +234,27 @@ func PartitionCollectionWithParameters(
 
 	sessCtx := mongo.NewSessionContext(ctx, sess)
 
-	resp := srcColl.Database().RunCommand(
-		sessCtx,
-		bson.D{
-			{"find", srcColl.Name()},
-			{"filter", bson.D{
-				{"$sampleRate", util.Divide(1, collDocCount/int64(numPartitions))},
+	naturalSampleRate := util.Divide(1, collDocCount/int64(numPartitions))
+
+	cmd := bson.D{
+		{"find", srcColl.Name()},
+		{"hint", bson.D{{"$natural", 1}}},
+		{"batchSize", 1},
+		{"$_requestResumeToken", true},
+	}
+
+	if naturalSampleRate < 1 {
+		cmd = append(
+			cmd,
+			bson.E{"filter", bson.D{
+				{"$sampleRate", naturalSampleRate},
 			}},
-			{"hint", bson.D{{"$natural", 1}}},
-			{"batchSize", 1},
-			{"$_requestResumeToken", true},
-		},
-	)
+		)
+	}
+
+	fmt.Printf("----- cmd: %v\n\n", cmd)
+
+	resp := srcColl.Database().RunCommand(sessCtx, cmd)
 
 	cursor, err := cursor.New(srcColl.Database(), resp)
 	if err != nil {
