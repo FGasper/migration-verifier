@@ -103,10 +103,6 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 		panic("error!!! " + err.Error())
 	}
 
-	if len(results) > 0 {
-		panic(fmt.Sprintf("nonononono got mismatch: %+v", results))
-	}
-
 	return results, docCount, byteCount, err
 }
 
