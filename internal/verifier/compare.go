@@ -546,7 +546,7 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				// TODO
 				if upperRecId, has := upperRecordId.Get(); has {
 					if recordID.AsInt64() > upperRecId {
-						// fmt.Printf("------------ query reached upper bound")
+						//fmt.Printf("------------ query reached upper bound\n\n\n")
 						break
 					}
 				}
