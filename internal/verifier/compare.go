@@ -399,6 +399,14 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 			defer close(srcChannel)
 			defer close(srcToDstChannel)
 
+			sess, err := verifier.srcClient.StartSession()
+			if err != nil {
+				return errors.Wrapf(err, "starting session")
+			}
+			defer sess.EndSession(ctx)
+
+			sctx := mongo.NewSessionContext(ctx, sess)
+
 			coll := verifier.srcClientCollection(task)
 
 			cmd := bson.D{
@@ -416,7 +424,7 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 				panic(fmt.Sprintf("unknown type %T for lower bound", bound))
 			}
 
-			resp := coll.Database().RunCommand(ctx, cmd)
+			resp := coll.Database().RunCommand(sctx, cmd)
 			cursor, err := cursor.New(coll.Database(), resp)
 			if err != nil {
 				return errors.Wrapf(err, "reading from source")
@@ -481,7 +489,7 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 					}
 				}
 
-				if err := cursor.GetNext(ctx); err != nil {
+				if err := cursor.GetNext(sctx); err != nil {
 					return errors.Wrapf(err, "reading more from source")
 				}
 
