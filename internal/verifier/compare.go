@@ -8,6 +8,7 @@ import (
 
 	"github.com/10gen/migration-verifier/chanutil"
 	"github.com/10gen/migration-verifier/contextplus"
+	"github.com/10gen/migration-verifier/cursor"
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
@@ -20,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 	"golang.org/x/exp/slices"
 )
 
@@ -390,7 +392,163 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 	srcChannel := make(chan docWithTs)
 	dstChannel := make(chan docWithTs)
 
+	if task.QueryFilter.Partition.Natural {
+		srcToDstChannel := make(chan []bson.Raw, 2)
+
+		readSrcCallback := func(ctx context.Context, state *retry.FuncInfo) error {
+			defer close(srcChannel)
+			defer close(srcToDstChannel)
+
+			coll := verifier.srcClientCollection(task)
+
+			cmd := bson.D{
+				{"find", coll.Name()},
+				{"hint", bson.D{{"$natural", 1}}},
+				{"$_requestResumeToken", true},
+			}
+
+			switch bound := task.QueryFilter.Partition.Key.Lower.(type) {
+			case primitive.MinKey:
+				// start at the beginning
+			case bson.D:
+				cmd = append(cmd, bson.E{"$_resumeAfter", task.QueryFilter.Partition.Key.Lower})
+			default:
+				panic(fmt.Sprintf("unknown type %T for lower bound", bound))
+			}
+
+			resp := coll.Database().RunCommand(ctx, cmd)
+			cursor, err := cursor.New(coll.Database(), resp)
+			if err != nil {
+				return errors.Wrapf(err, "reading from source")
+			}
+
+			state.NoteSuccess("opened cursor (got %d docs)", len(cursor.GetCurrentBatch()))
+
+			var upperRecordId option.Option[int64]
+
+			switch bound := task.QueryFilter.Partition.Upper.(type) {
+			case primitive.MaxKey:
+				// Read until the end.
+			case int64:
+				upperRecordId = option.Some(bound)
+			default:
+				panic(fmt.Sprintf("unknown type %T for upper bound", bound))
+			}
+
+			for !cursor.IsFinished() {
+				batch := cursor.GetCurrentBatch()
+				ts, exists := cursor.GetExtra()["operationTime"]
+				if !exists {
+					panic(fmt.Sprintf("no op time from getMore: %v", cursor.GetExtra()))
+				}
+
+				ts_s, ts_i, ok := ts.TimestampOK()
+				if !ok {
+					panic("bad timestamp??") // TODO
+				}
+
+				// Send the batch to the dst so it can read the docs.
+				srcToDstChannel <- batch
+
+				state.NoteSuccess("sent %batch to dst", len(batch))
+
+				// Now send to the comparison thread.
+				for _, doc := range batch {
+					srcChannel <- docWithTs{
+						doc: doc,
+						ts:  primitive.Timestamp{ts_s, ts_i},
+					}
+				}
+
+				state.NoteSuccess("sent %d docs to compare", len(batch))
+
+				token, hasToken := cursor.GetCursorExtra()["postBatchResumeToken"]
+				if !hasToken {
+					panic("no token")
+				}
+
+				recordID, err := token.Document().LookupErr("$recordId")
+				if errors.Is(err, bsoncore.ErrElementNotFound) {
+					panic("maybe clustered?")
+				} else if err != nil {
+					panic("err " + err.Error())
+				}
+
+				// TODO
+				if upperRecId, has := upperRecordId.Get(); has {
+					if recordID.AsInt64() > upperRecId {
+						break
+					}
+				}
+
+				if err := cursor.GetNext(ctx); err != nil {
+					return errors.Wrapf(err, "reading more from source")
+				}
+
+				state.NoteSuccess("iterated cursor (got %d docs)", len(cursor.GetCurrentBatch()))
+			}
+
+			return nil
+		}
+
+		readDstCallback := func(ctx context.Context, state *retry.FuncInfo) error {
+			defer close(dstChannel)
+
+			sess, err := verifier.dstClient.StartSession()
+			if err != nil {
+				return errors.Wrapf(err, "starting session")
+			}
+			defer sess.EndSession(ctx)
+
+			sctx := mongo.NewSessionContext(ctx, sess)
+
+			coll := verifier.dstClientCollection(task)
+
+			for docsToRead := range srcToDstChannel {
+				state.NoteSuccess("received %d docs from source to fetch", len(docsToRead))
+
+				ids := make([]bson.RawValue, 0, len(docsToRead))
+
+				for _, doc := range docsToRead {
+					id, err := doc.LookupErr("_id")
+					if err != nil {
+						return errors.Wrapf(err, "finding _id in doc")
+					}
+
+					ids = append(ids, id)
+				}
+
+				cursor, err := coll.Find(
+					sctx,
+					bson.D{
+						{"_id", bson.D{{"$in", ids}}},
+					},
+				)
+				if err != nil {
+					return errors.Wrapf(err, "finding %d documents", len(ids))
+				}
+
+				state.NoteSuccess("opened dst find cursor")
+
+				err = errors.Wrap(
+					iterateCursorToChannel(sctx, state, cursor, dstChannel),
+					"failed to read destination documents",
+				)
+
+				if err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
+
+		return srcChannel, dstChannel, readSrcCallback, readDstCallback
+	}
+
 	readSrcCallback := func(ctx context.Context, state *retry.FuncInfo) error {
+		defer close(srcChannel)
+
 		// We open a session here so that we can read the session’s cluster
 		// time, which we store along with any document mismatches we may see.
 		//
@@ -429,6 +587,8 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 	}
 
 	readDstCallback := func(ctx context.Context, state *retry.FuncInfo) error {
+		defer close(dstChannel)
+
 		sess, err := verifier.dstClient.StartSession()
 		if err != nil {
 			return errors.Wrapf(err, "starting session")
@@ -470,8 +630,6 @@ func iterateCursorToChannel(
 	cursor *mongo.Cursor,
 	writer chan<- docWithTs,
 ) error {
-	defer close(writer)
-
 	for cursor.Next(sctx) {
 		state.NoteSuccess("received a document")
 

@@ -3,18 +3,19 @@ package partitions
 import (
 	"context"
 	"fmt"
-	"math/rand"
 
+	"github.com/10gen/migration-verifier/cursor"
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/10gen/migration-verifier/internal/uuidutil"
-	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 )
 
 const (
@@ -206,32 +207,6 @@ func PartitionCollectionWithParameters(
 		return nil, 0, 0, err
 	}
 
-	// The lower bound for the collection. There is no partitioning to do if the bound is nil.
-	minIDBound, err := getOuterIDBound(ctx, subLogger, minBound, srcDB, uuidEntry.CollName, globalFilter)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	if minIDBound == nil {
-		subLogger.Info().
-			Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
-			Msg("No minimum _id found for collection; will not perform collection copy for this collection.")
-
-		return nil, 0, 0, nil
-	}
-
-	// The upper bound for the collection. There is no partitioning to do if the bound is nil.
-	maxIDBound, err := getOuterIDBound(ctx, subLogger, maxBound, srcDB, uuidEntry.CollName, globalFilter)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	if maxIDBound == nil {
-		subLogger.Info().
-			Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
-			Msg("No maximum _id found for collection; will not perform collection copy for this collection.")
-
-		return nil, 0, 0, nil
-	}
-
 	// The total number of partitions needed for the collection. If it is a capped collection, we
 	// must only create one partition for the entire collection. Otherwise, calculate the
 	// appropriate number of partitions.
@@ -251,98 +226,213 @@ func PartitionCollectionWithParameters(
 		}
 	}
 
-	// Prepend the lower bound and append the upper bound to any intermediate bounds.
-	allIDBounds := make([]any, 0, numPartitions+1)
-	allIDBounds = append(allIDBounds, minIDBound)
-
-	// The intermediate bounds for the collection (i.e. all bounds apart from the lower and upper bounds).
-	// It's okay for these bounds to be nil, since we already have the lower and upper bounds from which
-	// to make at least one partition.
-	var (
-		midIDBounds   []any
-		collDropped   bool
-		prevSampleErr error
-	)
-	err = retry.New().
-		WithErrorCodes(util.SampleTooManyDuplicatesErrCode).
-		WithCallback(func(ctx context.Context, info *retry.FuncInfo) error {
-			if info.GetAttemptNumber() > 0 && mmongo.ErrorHasCode(prevSampleErr, util.SampleTooManyDuplicatesErrCode) {
-				subLogger.Debug().
-					Err(prevSampleErr).
-					Int("prevNumPartitions", numPartitions).
-					Int("newNumPartitions", numPartitions).
-					Msg("Retrying with decreased number of partitions. This will hopefully make $sample succeed.")
-
-				numPartitions = numPartitions / 10
-			}
-			midIDBounds, collDropped, err = getMidIDBounds(
-				ctx,
-				subLogger,
-				srcDB,
-				uuidEntry.CollName,
-				collDocCount,
-				numPartitions,
-				sampleMinNumDocs,
-				sampleRate,
-				globalFilter,
-			)
-			prevSampleErr = err
-			return err
-		}, "sampling documents to get partition mid bounds").Run(ctx, subLogger)
-
+	sess, err := srcColl.Database().Client().StartSession()
 	if err != nil {
-		return nil, 0, 0, err
+		panic("nonono")
 	}
-	if collDropped {
-		// Skip this collection.
-		return nil, 0, 0, nil
-	}
-	if midIDBounds != nil {
-		allIDBounds = append(allIDBounds, midIDBounds...)
-	}
+	defer sess.EndSession(ctx)
 
-	allIDBounds = append(allIDBounds, maxIDBound)
+	sessCtx := mongo.NewSessionContext(ctx, sess)
 
-	if len(allIDBounds) < 2 {
-		return nil, 0, 0, errors.Errorf("need at least 2 _id bounds to make a partition, but got %d _id bound(s)", len(allIDBounds))
+	resp := srcColl.Database().RunCommand(
+		sessCtx,
+		bson.D{
+			{"find", srcColl.Name()},
+			{"filter", bson.D{
+				{"$sampleRate", util.Divide(1, collDocCount/int64(numPartitions))},
+			}},
+			{"hint", bson.D{{"$natural", 1}}},
+			{"batchSize", 1},
+			{"$_requestResumeToken", true},
+		},
+	)
+
+	cursor, err := cursor.New(srcColl.Database(), resp)
+	if err != nil {
+		return nil, 0, 0, errors.Wrapf(err, "querying collection to partition")
 	}
-
-	// TODO (REP-552): Figure out what situations this occurs for, and whether or not it results from a bug.
-	if len(allIDBounds) != numPartitions+1 {
-		subLogger.Info().
-			Int("idBounds", len(allIDBounds)).
-			Int("numPartitions", numPartitions).
-			Msg("_id bounds should outnumber partitions by 1.")
-	}
-
-	// Choose a random index to start to avoid over-assigning partitions to a specific replicator.
-	// rand.Int() generates non-negative integers only.
-	replIndex := rand.Int() % len(replicatorList)
-	subLogger.Debug().
-		Int("numPartitions", len(allIDBounds)-1).
-		Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
-		Bool("isCapped", isCapped).
-		Msg("Creating partitions.")
 
 	// Create the partitions with the index key bounds.
-	partitions := make([]*Partition, 0, len(allIDBounds)-1)
+	partitions := make([]*Partition, 0, numPartitions)
 
-	for i := 0; i < len(allIDBounds)-1; i++ {
-		partitionKey := PartitionKey{
-			SourceUUID:  uuidEntry.UUID,
-			MongosyncID: replicatorList[replIndex].ID,
-			Lower:       allIDBounds[i],
-		}
-		partition := &Partition{
-			Key:      partitionKey,
-			Ns:       &Namespace{uuidEntry.DBName, uuidEntry.CollName},
-			Upper:    allIDBounds[i+1],
-			IsCapped: isCapped,
-		}
-		partitions = append(partitions, partition)
+	lowerBound := any(primitive.MinKey{})
+	addPartition := func(upper any) {
+		partitions = append(
+			partitions,
+			&Partition{
+				Natural: true,
+				Ns:      &Namespace{uuidEntry.DBName, uuidEntry.CollName},
+				Key: PartitionKey{
+					Lower: lowerBound,
+				},
 
-		replIndex = (replIndex + 1) % len(replicatorList)
+				Upper: upper,
+			},
+		)
 	}
+
+	/*
+		for i := 0; i < len(allIDBounds)-1; i++ {
+
+			partition := &Partition{
+				Key:      partitionKey,
+				Ns:       &Namespace{uuidEntry.DBName, uuidEntry.CollName},
+				Upper:    allIDBounds[i+1],
+				IsCapped: isCapped,
+			}
+			partitions = append(partitions, partition)
+	*/
+
+	for len(cursor.GetCurrentBatch()) > 0 {
+		token, hasToken := cursor.GetCursorExtra()["postBatchResumeToken"]
+		if !hasToken {
+			panic("no token") // TODO
+		}
+
+		recordID, err := token.Document().LookupErr("$recordId")
+		if errors.Is(err, bsoncore.ErrElementNotFound) {
+			panic("maybe clustered?")
+		} else if err != nil {
+			panic("err " + err.Error())
+		}
+
+		addPartition(recordID)
+
+		lowerBound = token
+
+		if err := cursor.GetNext(sessCtx, bson.E{"batchSize", 1}); err != nil {
+			return nil, 0, 0, errors.Wrapf(err, "getting next resume token")
+		}
+	}
+
+	addPartition(primitive.MaxKey{})
+
+	//allIDBounds := make([]any, 0, numPartitions+1)
+	//allIDBounds = append(allIDBounds, primitive.MinKey{})
+
+	/*
+
+		// The lower bound for the collection. There is no partitioning to do if the bound is nil.
+		minIDBound, err := getOuterIDBound(ctx, subLogger, minBound, srcDB, uuidEntry.CollName, globalFilter)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if minIDBound == nil {
+			subLogger.Info().
+				Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
+				Msg("No minimum _id found for collection; will not perform collection copy for this collection.")
+
+			return nil, 0, 0, nil
+		}
+
+		// The upper bound for the collection. There is no partitioning to do if the bound is nil.
+		maxIDBound, err := getOuterIDBound(ctx, subLogger, maxBound, srcDB, uuidEntry.CollName, globalFilter)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if maxIDBound == nil {
+			subLogger.Info().
+				Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
+				Msg("No maximum _id found for collection; will not perform collection copy for this collection.")
+
+			return nil, 0, 0, nil
+		}
+
+
+
+		// Prepend the lower bound and append the upper bound to any intermediate bounds.
+		allIDBounds := make([]any, 0, numPartitions+1)
+		allIDBounds = append(allIDBounds, minIDBound)
+
+		// The intermediate bounds for the collection (i.e. all bounds apart from the lower and upper bounds).
+		// It's okay for these bounds to be nil, since we already have the lower and upper bounds from which
+		// to make at least one partition.
+		var (
+			midIDBounds   []any
+			collDropped   bool
+			prevSampleErr error
+		)
+		err = retry.New().
+			WithErrorCodes(util.SampleTooManyDuplicatesErrCode).
+			WithCallback(func(ctx context.Context, info *retry.FuncInfo) error {
+				if info.GetAttemptNumber() > 0 && mmongo.ErrorHasCode(prevSampleErr, util.SampleTooManyDuplicatesErrCode) {
+					subLogger.Debug().
+						Err(prevSampleErr).
+						Int("prevNumPartitions", numPartitions).
+						Int("newNumPartitions", numPartitions).
+						Msg("Retrying with decreased number of partitions. This will hopefully make $sample succeed.")
+
+					numPartitions = numPartitions / 10
+				}
+				midIDBounds, collDropped, err = getMidIDBounds(
+					ctx,
+					subLogger,
+					srcDB,
+					uuidEntry.CollName,
+					collDocCount,
+					numPartitions,
+					sampleMinNumDocs,
+					sampleRate,
+					globalFilter,
+				)
+				prevSampleErr = err
+				return err
+			}, "sampling documents to get partition mid bounds").Run(ctx, subLogger)
+
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if collDropped {
+			// Skip this collection.
+			return nil, 0, 0, nil
+		}
+		if midIDBounds != nil {
+			allIDBounds = append(allIDBounds, midIDBounds...)
+		}
+
+		allIDBounds = append(allIDBounds, maxIDBound)
+
+		if len(allIDBounds) < 2 {
+			return nil, 0, 0, errors.Errorf("need at least 2 _id bounds to make a partition, but got %d _id bound(s)", len(allIDBounds))
+		}
+
+		// TODO (REP-552): Figure out what situations this occurs for, and whether or not it results from a bug.
+		if len(allIDBounds) != numPartitions+1 {
+			subLogger.Info().
+				Int("idBounds", len(allIDBounds)).
+				Int("numPartitions", numPartitions).
+				Msg("_id bounds should outnumber partitions by 1.")
+		}
+
+		// Choose a random index to start to avoid over-assigning partitions to a specific replicator.
+		// rand.Int() generates non-negative integers only.
+		replIndex := rand.Int() % len(replicatorList)
+		subLogger.Debug().
+			Int("numPartitions", len(allIDBounds)-1).
+			Str("namespace", uuidEntry.DBName+"."+uuidEntry.CollName).
+			Bool("isCapped", isCapped).
+			Msg("Creating partitions.")
+
+		// Create the partitions with the index key bounds.
+		partitions := make([]*Partition, 0, len(allIDBounds)-1)
+
+		for i := 0; i < len(allIDBounds)-1; i++ {
+			partitionKey := PartitionKey{
+				SourceUUID:  uuidEntry.UUID,
+				MongosyncID: replicatorList[replIndex].ID,
+				Lower:       allIDBounds[i],
+			}
+			partition := &Partition{
+				Key:      partitionKey,
+				Ns:       &Namespace{uuidEntry.DBName, uuidEntry.CollName},
+				Upper:    allIDBounds[i+1],
+				IsCapped: isCapped,
+			}
+			partitions = append(partitions, partition)
+
+			replIndex = (replIndex + 1) % len(replicatorList)
+		}
+	*/
 
 	return partitions, types.DocumentCount(collDocCount), types.ByteCount(collSizeInBytes), nil
 }

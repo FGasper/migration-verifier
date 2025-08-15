@@ -29,8 +29,9 @@ type Namespace struct {
 //
 // A valid partition must have a non-nil lower bound (in its PartitionKey) and a non-nil upper bound.
 type Partition struct {
-	Key PartitionKey `bson:"_id"`
-	Ns  *Namespace   `bson:"namespace"`
+	Key     PartitionKey `bson:"_id"`
+	Ns      *Namespace   `bson:"namespace"`
+	Natural bool
 
 	// The upper index key bound for the partition.
 	Upper any `bson:"upperBound"`
