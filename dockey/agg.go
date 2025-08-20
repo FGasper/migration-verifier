@@ -21,7 +21,20 @@ import (
 func ExtractTrueDocKeyAgg(fieldNames []string, docExpr string) bson.D {
 	assertFieldNameUniqueness(fieldNames)
 
+	// This document will look like:
+	// {
+	//   0: "$$ROOT.foo.bar",
+	//   1: "$$ROOT._id"
+	// }
+	// Aggregation will (usefully!) omit either of those fields if they
+	// reference a nonexistent field.
+	//
+	// Were we OK with having nonexistent fields reported as null we could
+	// simply create an array then $arrayToObject it, but it seems better not
+	// to elide nonexistent vs. null values.
+
 	var docKeyNumKeys bson.D
+
 	numToKeyLookup := map[string]string{}
 
 	for n, name := range fieldNames {
