@@ -325,10 +325,9 @@ func (csr *ChangeStreamReader) GetChangeStreamFilter() (pipeline mongo.Pipeline)
 		pipeline,
 		bson.D{
 			{"$addFields", bson.D{
-				{"_id", "$$REMOVE"},
 				{"updateDescription", "$$REMOVE"},
 				{"wallTime", "$$REMOVE"},
-				{"documentKey", "$documentKey._id"},
+				{"documentKey", bson.D{{"_id", "$documentKey._id"}}},
 			}},
 		},
 	)
@@ -684,6 +683,8 @@ func (csr *ChangeStreamReader) createChangeStream(
 	if err != nil {
 		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to open change stream")
 	}
+
+	changeStream.SetBatchSize(100000)
 
 	err = csr.persistChangeStreamResumeToken(ctx, changeStream)
 	if err != nil {
