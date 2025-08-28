@@ -519,7 +519,21 @@ func iterateCursorToChannel(
 ) error {
 	defer close(writer)
 
-	for cursor.Next(sctx) {
+	for {
+		if !cursor.TryNext(sctx) {
+			if cursor.Err() != nil {
+				return errors.Wrap(cursor.Err(), "failed to iterate cursor")
+			}
+
+			if cursor.ID() == 0 {
+				state.NoteSuccess("finished cursor")
+				return nil
+			}
+
+			state.NoteSuccess("received empty batch")
+			continue
+		}
+
 		state.NoteSuccess("received a document (%d in batch remaining)", cursor.RemainingBatchLength())
 
 		clusterTime, err := util.GetClusterTimeFromSession(sctx)
@@ -543,7 +557,7 @@ func iterateCursorToChannel(
 		}
 	}
 
-	return errors.Wrap(cursor.Err(), "failed to iterate cursor")
+	return
 }
 
 func getMapKey(docKeyValues []bson.RawValue) string {
