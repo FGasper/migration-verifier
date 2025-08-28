@@ -376,6 +376,8 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 	latestEvent := option.None[ParsedEvent]()
 
+	startAt := time.Now()
+
 	var batchTotalBytes int
 	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
 		gotEvent := cs.TryNext(mongo.NewSessionContext(ctx, sess))
@@ -493,11 +495,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 	ri.NoteSuccess("parsed %d-event batch", len(changeEvents))
 
-	csr.logger.Debug().
-		Stringer("changeStream", csr).
-		Int("batchEvents", len(changeEvents)).
-		Int("batchBytes", batchTotalBytes).
-		Msg("Received change events.")
+	beforeSend := time.Now()
 
 	select {
 	case <-ctx.Done():
@@ -511,6 +509,14 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		clusterTime: *sess.OperationTime(),
 	}:
 	}
+
+	csr.logger.Debug().
+		Stringer("changeStream", csr).
+		Stringer("timeToRead", beforeSend.Sub(startAt)).
+		Stringer("timeToSend", time.Since(beforeSend)).
+		Int("batchEvents", len(changeEvents)).
+		Int("batchBytes", batchTotalBytes).
+		Msg("Received change events.")
 
 	ri.NoteSuccess("sent %d-event batch to handler", len(changeEvents))
 
