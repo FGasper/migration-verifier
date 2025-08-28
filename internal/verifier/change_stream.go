@@ -324,8 +324,11 @@ func (csr *ChangeStreamReader) GetChangeStreamFilter() (pipeline mongo.Pipeline)
 	pipeline = append(
 		pipeline,
 		bson.D{
-			{"$unset", []string{
-				"updateDescription",
+			{"$addFields", bson.D{
+				{"_id", "$$REMOVE"},
+				{"updateDescription", "$$REMOVE"},
+				{"wallTime", "$$REMOVE"},
+				{"documentKey", "$documentKey._id"},
 			}},
 		},
 	)
@@ -394,10 +397,6 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			changeEvents = make([]ParsedEvent, batchSize)
 		}
 
-		if batchTotalBytes == 0 {
-			fmt.Printf("======== 1st event of new batch: %v\n\n", cs.Current)
-		}
-
 		batchTotalBytes += len(cs.Current)
 
 		if err := cs.Decode(&changeEvents[eventsRead]); err != nil {
@@ -462,8 +461,9 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			csr.logger.Warn().
 				Stringer("changeStream", csr).
 				Stringer("lag", time.Second*time.Duration(lagSecs)).
-				Str("batchSize", reportutils.FmtBytes(batchTotalBytes)).
-				Msg("Inefficient change stream batch size despite lag.")
+				Int("batchEvents", len(changeEvents)).
+				Str("batchBytes", reportutils.FmtBytes(batchTotalBytes)).
+				Msg("Inefficient change stream batch size despite lag. Verification may never finish.")
 		}
 	} else {
 		csr.logger.Warn().
