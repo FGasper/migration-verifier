@@ -177,7 +177,7 @@ type VerifierSettings struct {
 }
 
 // NewVerifier creates a new Verifier
-func NewVerifier(settings VerifierSettings, dbPath, logPath string) *Verifier {
+func NewVerifier(settings VerifierSettings, logPath, dbPath string) *Verifier {
 	readConcern := settings.ReadConcernSetting
 	if readConcern == "" {
 		readConcern = ReadConcernMajority
