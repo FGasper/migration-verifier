@@ -13,6 +13,7 @@ import (
 	"github.com/samber/mo"
 	"go.etcd.io/bbolt"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"golang.org/x/exp/constraints"
 )
 
@@ -55,7 +56,7 @@ func getRecheckBucketPrefixForGeneration(generation int) string {
 
 type Recheck struct {
 	DB, Coll string
-	DocID    bson.Raw
+	DocID    bson.RawValue
 	Size     types.ByteCount
 }
 
@@ -103,6 +104,11 @@ func (ldb *LocalDB) GetRecheckReader(ctx context.Context, generation int) <-chan
 				}
 
 				return bucket.ForEach(func(k, v []byte) error {
+					docID := bson.RawValue{
+						Type:  bsontype.Type(k[0]),
+						Value: k[1:],
+					}
+
 					size, err := parseUint(v)
 					if err != nil {
 						ldb.log.Warn().
@@ -114,7 +120,7 @@ func (ldb *LocalDB) GetRecheckReader(ctx context.Context, generation int) <-chan
 					recheck := Recheck{
 						DB:    db,
 						Coll:  coll,
-						DocID: k,
+						DocID: docID,
 						Size:  types.ByteCount(size),
 					}
 
@@ -159,7 +165,7 @@ func (ldb *LocalDB) InsertRechecks(
 			bucketCache := map[string]*bbolt.Bucket{}
 
 			for i, dbName := range dbNames {
-				bsonID, err := bson.Marshal(documentIDs[i])
+				bsonType, bsonIDVal, err := bson.MarshalValue(documentIDs[i])
 				if err != nil {
 					return errors.Wrapf(err, "marshaling document ID (%v)", documentIDs[i])
 				}
@@ -178,6 +184,8 @@ func (ldb *LocalDB) InsertRechecks(
 
 					bucketCache[namespace] = bucket
 				}
+
+				bsonID := append([]byte{byte(bsonType)}, bsonIDVal...)
 
 				err = bucket.Put(bsonID, formatUint(uint64(dataSizes[i])))
 				if err != nil {

@@ -272,7 +272,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	//    this to prevent one thread from doing all of the rechecks.
 
 	var prevDBName, prevCollName string
-	var idAccum []any
+	var idAccum []bson.RawValue
 	var idsSizer util.BSONArraySizer
 	var totalDocs types.DocumentCount
 	var dataSizeAccum, totalRecheckData int64
@@ -306,7 +306,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 
 		task, err := verifier.InsertDocumentRecheckTask(
 			ctx,
-			idAccum,
+			lo.ToAnySlice(idAccum),
 			types.ByteCount(dataSizeAccum),
 			namespace,
 		)
@@ -342,11 +342,6 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			return errors.Wrap(err, "reading rechecks from local DB")
 		}
 
-		var idRaw bson.RawValue
-		if err := bson.Unmarshal(recheck.DocID, &idRaw); err != nil {
-			return errors.Wrapf(err, "unmarshaling doc ID (%v)", recheck.DocID)
-		}
-
 		// We persist rechecks if any of these happen:
 		// - the namespace has changed
 		// - we’ve reached the per-task recheck maximum
@@ -371,9 +366,9 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			idAccum = idAccum[:0]
 		}
 
-		idsSizer.Add(idRaw)
+		idsSizer.Add(recheck.DocID)
 		dataSizeAccum += int64(recheck.Size)
-		idAccum = append(idAccum, idRaw)
+		idAccum = append(idAccum, recheck.DocID)
 
 		totalRecheckData += int64(recheck.Size)
 		totalDocs++
