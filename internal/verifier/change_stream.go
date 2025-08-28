@@ -378,7 +378,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 	var batchTotalBytes int
 	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
-		gotEvent := cs.TryNext(ctx)
+		gotEvent := cs.TryNext(mongo.NewSessionContext(ctx, sess))
 
 		if cs.Err() != nil {
 			return errors.Wrap(cs.Err(), "change stream iteration failed")
@@ -692,8 +692,6 @@ func (csr *ChangeStreamReader) createChangeStream(
 		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to open change stream")
 	}
 
-	changeStream.SetBatchSize(100000)
-
 	err = csr.persistChangeStreamResumeToken(ctx, changeStream)
 	if err != nil {
 		return nil, nil, primitive.Timestamp{}, err
@@ -855,6 +853,8 @@ func (csr *ChangeStreamReader) resumeTokenDocID() string {
 func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Context, cs *mongo.ChangeStream) error {
 	token := cs.ResumeToken()
 
+	start := time.Now()
+
 	coll := csr.getChangeStreamMetadataCollection()
 	_, err := coll.ReplaceOne(
 		ctx,
@@ -875,7 +875,9 @@ func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Contex
 				Msg("failed to extract resume token timestamp")
 		}
 
-		logEvent.Msgf("Persisted %s's resume token.", csr)
+		logEvent.
+			Stringer("timeElapsed", time.Since(start)).
+			Msgf("Persisted %s's resume token.", csr)
 
 		return nil
 	}
