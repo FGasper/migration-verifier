@@ -226,8 +226,6 @@ func (verifier *Verifier) compareDocsFromChannels(
 						break
 					}
 
-					fi.NoteSuccess("received document from source")
-
 					srcDocCount++
 					srcByteCount += types.ByteCount(len(srcDocWithTs.doc))
 					verifier.workerTracker.SetSrcCounts(
@@ -257,8 +255,6 @@ func (verifier *Verifier) compareDocsFromChannels(
 						dstClosed = true
 						break
 					}
-
-					fi.NoteSuccess("received document from destination")
 				}
 
 				return nil
@@ -271,6 +267,11 @@ func (verifier *Verifier) compareDocsFromChannels(
 				"failed to read documents",
 			)
 		}
+		fi.NoteSuccess(
+			"received (from src? %t; from dst? %t)",
+			!srcClosed,
+			!dstClosed,
+		)
 
 		if srcDocWithTs.doc != nil {
 			err := handleNewDoc(srcDocWithTs, true)
@@ -519,7 +520,7 @@ func iterateCursorToChannel(
 	defer close(writer)
 
 	for cursor.Next(sctx) {
-		state.NoteSuccess("received a document")
+		state.NoteSuccess("received a document (%d in batch remaining)", cursor.RemainingBatchLength())
 
 		clusterTime, err := util.GetClusterTimeFromSession(sctx)
 		if err != nil {
@@ -534,6 +535,8 @@ func iterateCursorToChannel(
 				ts:  clusterTime,
 			},
 		)
+
+		state.NoteSuccess("sent document to checker")
 
 		if err != nil {
 			return errors.Wrapf(err, "sending document to compare thread")

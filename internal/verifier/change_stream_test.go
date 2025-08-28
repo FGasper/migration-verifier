@@ -108,7 +108,7 @@ func (suite *IntegrationTestSuite) TestChangeStreamFilter_BsonSize() {
 	cs, err := suite.srcMongoClient.Watch(
 		ctx,
 		filter,
-		options.ChangeStream().SetFullDocument("updateLookup"),
+		options.ChangeStream().SetFullDocument(options.UpdateLookup),
 	)
 	suite.Require().NoError(err)
 	defer cs.Close(ctx)

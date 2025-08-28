@@ -7,6 +7,7 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/keystring"
 	"github.com/10gen/migration-verifier/internal/logger"
+	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
@@ -393,6 +394,10 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			changeEvents = make([]ParsedEvent, batchSize)
 		}
 
+		if batchTotalBytes == 0 {
+			fmt.Printf("======== 1st event of new batch: %v\n\n", cs.Current)
+		}
+
 		batchTotalBytes += len(cs.Current)
 
 		if err := cs.Decode(&changeEvents[eventsRead]); err != nil {
@@ -452,6 +457,14 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	if err == nil {
 		lagSecs := int64(sess.OperationTime().T) - int64(tokenTs.T)
 		csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
+
+		if lagSecs > 60 && batchTotalBytes < (12<<20) {
+			csr.logger.Warn().
+				Stringer("changeStream", csr).
+				Stringer("lag", time.Second*time.Duration(lagSecs)).
+				Str("batchSize", reportutils.FmtBytes(batchTotalBytes)).
+				Msg("Inefficient change stream batch size despite lag.")
+		}
 	} else {
 		csr.logger.Warn().
 			Err(err).
@@ -472,6 +485,12 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	}
 
 	ri.NoteSuccess("parsed %d-event batch", len(changeEvents))
+
+	csr.logger.Debug().
+		Stringer("changeStream", csr).
+		Int("batchEvents", len(changeEvents)).
+		Int("batchBytes", batchTotalBytes).
+		Msg("Received change events.")
 
 	select {
 	case <-ctx.Done():
@@ -622,8 +641,8 @@ func (csr *ChangeStreamReader) createChangeStream(
 ) (*mongo.ChangeStream, mongo.Session, primitive.Timestamp, error) {
 	pipeline := csr.GetChangeStreamFilter()
 	opts := options.ChangeStream().
-		SetMaxAwaitTime(maxChangeStreamAwaitTime).
-		SetFullDocument(options.UpdateLookup)
+		SetMaxAwaitTime(maxChangeStreamAwaitTime) //.
+		//SetFullDocument(options.UpdateLookup)
 
 	if csr.clusterInfo.VersionArray[0] >= 6 {
 		opts = opts.SetCustomPipeline(bson.M{"showExpandedEvents": true})
