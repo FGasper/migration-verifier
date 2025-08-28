@@ -457,12 +457,20 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
 
 		if lagSecs > 60 && batchTotalBytes < (12<<20) {
-			csr.logger.Warn().
+			logEvt := csr.logger.Warn().
 				Stringer("changeStream", csr).
-				Stringer("lag", time.Second*time.Duration(lagSecs)).
-				Int("batchEvents", len(changeEvents)).
-				Str("batchBytes", reportutils.FmtBytes(batchTotalBytes)).
-				Msg("Inefficient change stream batch size despite lag. Verification may never finish.")
+				Stringer("lag", time.Second*time.Duration(lagSecs))
+
+			scaryMsg := "Verification may never finish."
+
+			if eventsRead == 0 {
+				logEvt.Msg("Got empty change stream batch despite lag. " + scaryMsg)
+			} else {
+				logEvt.
+					Int("batchEvents", len(changeEvents)).
+					Str("batchBytes", reportutils.FmtBytes(batchTotalBytes)).
+					Msg("Got small change stream batch despite lag. " + scaryMsg)
+			}
 		}
 	} else {
 		csr.logger.Warn().
