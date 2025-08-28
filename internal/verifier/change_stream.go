@@ -377,6 +377,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	latestEvent := option.None[ParsedEvent]()
 
 	startAt := time.Now()
+	var timeToRespond time.Time
 
 	var batchTotalBytes int
 	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
@@ -391,6 +392,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		}
 
 		if changeEvents == nil {
+			timeToRespond = time.Now()
 			batchSize := cs.RemainingBatchLength() + 1
 
 			ri.NoteSuccess("received a batch of %d change event(s)", batchSize)
@@ -512,7 +514,8 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 	csr.logger.Debug().
 		Stringer("changeStream", csr).
-		Stringer("timeToRead", beforeSend.Sub(startAt)).
+		Stringer("timeToReadFirst", timeToRespond.Sub(startAt)).
+		Stringer("timeToReadAll", beforeSend.Sub(startAt)).
 		Stringer("timeToSend", time.Since(beforeSend)).
 		Int("batchEvents", len(changeEvents)).
 		Int("batchBytes", batchTotalBytes).
