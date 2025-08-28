@@ -122,6 +122,8 @@ func (suite *IntegrationTestSuite) SetupTest() {
 func (suite *IntegrationTestSuite) TearDownTest() {
 	suite.T().Logf("Tearing down test %#q", suite.T().Name())
 
+	suite.Require().NoError(os.RemoveAll(suite.getDBPath()))
+
 	zerolog.SetGlobalLevel(suite.zerologGlobalLogLevel)
 
 	suite.contextCanceller(errors.Errorf("tearing down test %#q", suite.T().Name()))
@@ -155,11 +157,17 @@ func (suite *IntegrationTestSuite) GetTopology(client *mongo.Client) util.Cluste
 	return clusterInfo.Topology
 }
 
+func (suite *IntegrationTestSuite) getDBPath() string {
+	return suite.DBNameForTest() + ".db"
+}
+
 func (suite *IntegrationTestSuite) BuildVerifier() *Verifier {
 	qfilter := QueryFilter{Namespace: "keyhole.dealers"}
 	task := VerificationTask{QueryFilter: qfilter}
 
-	verifier := NewVerifier(VerifierSettings{}, "stderr")
+	suite.Require().NoError(os.RemoveAll(suite.getDBPath()))
+
+	verifier := NewVerifier(VerifierSettings{}, "stderr", suite.getDBPath())
 	//verifier.SetStartClean(true)
 	verifier.SetNumWorkers(3)
 	verifier.SetGenerationPauseDelay(0)

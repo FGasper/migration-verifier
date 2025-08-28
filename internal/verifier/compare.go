@@ -557,7 +557,7 @@ func iterateCursorToChannel(
 		}
 	}
 
-	return
+	return nil
 }
 
 func getMapKey(docKeyValues []bson.RawValue) string {

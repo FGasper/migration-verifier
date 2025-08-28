@@ -29,6 +29,7 @@ const (
 	workerSleepDelay      = "workerSleepDelay"
 	serverPort            = "serverPort"
 	logPath               = "logPath"
+	dbPathArg             = "dbPath"
 	srcNamespace          = "srcNamespace"
 	dstNamespace          = "dstNamespace"
 	metaDBName            = "metaDBName"
@@ -87,6 +88,11 @@ func main() {
 			Name:  logPath,
 			Value: "stdout",
 			Usage: "logging file `path`",
+		}),
+		altsrc.NewStringFlag(cli.StringFlag{
+			Name:  dbPathArg,
+			Value: verifier.DefaultLocalDBPath,
+			Usage: "path to internal datastore",
 		}),
 		altsrc.NewIntFlag(cli.IntFlag{
 			Name:  numWorkers,
@@ -224,8 +230,9 @@ func handleArgs(ctx context.Context, cCtx *cli.Context) (*verifier.Verifier, err
 	}
 
 	logPath := cCtx.String(logPath)
+	dbPath := cCtx.String(dbPathArg)
 
-	v := verifier.NewVerifier(verifierSettings, logPath)
+	v := verifier.NewVerifier(verifierSettings, logPath, dbPath)
 
 	v.GetLogger().Info().
 		Str("revision", Revision).

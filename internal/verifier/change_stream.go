@@ -279,7 +279,7 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 		Stringer("lag", lag).
 		Msg("Persisting rechecks for change events.")
 
-	return verifier.insertRecheckDocs(ctx, dbNames, collNames, docIDs, dataSizes)
+	return verifier.insertRecheckDocs(dbNames, collNames, docIDs, dataSizes)
 }
 
 // GetChangeStreamFilter returns an aggregation pipeline that filters
