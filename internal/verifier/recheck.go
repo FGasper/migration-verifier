@@ -9,9 +9,11 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mbson"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -95,31 +97,58 @@ func (verifier *Verifier) insertRecheckDocs(
 	verifier.mux.RLock()
 	defer verifier.mux.RUnlock()
 
-	generation, _ := verifier.getGenerationWhileLocked()
+	dbNames, collNames, rawDocIDs, dataSizes := deduplicateRechecks(
+		dbNames,
+		collNames,
+		documentIDs,
+		dataSizes,
+	)
 
-	docIDIndexes := lo.Range(len(documentIDs))
-	indexesPerThread := splitToChunks(docIDIndexes, verifier.numWorkers)
+	generation, _ := verifier.getGenerationWhileLocked()
 
 	eg, groupCtx := contextplus.ErrGroup(ctx)
 
 	genCollection := verifier.getRecheckQueueCollection(generation)
 
-	for _, curThreadIndexes := range indexesPerThread {
-		eg.Go(func() error {
-			models := make([]mongo.WriteModel, len(curThreadIndexes))
-			for m, i := range curThreadIndexes {
-				recheckDoc := RecheckDoc{
-					PrimaryKey: RecheckPrimaryKey{
-						SrcDatabaseName:   dbNames[i],
-						SrcCollectionName: collNames[i],
-						DocumentID:        documentIDs[i],
-					},
-					DataSize: dataSizes[i],
-				}
+	const batchByteLimit = 2 * 1024 * 1024
+	const batchCountLimit = 10000
 
-				models[m] = mongo.NewInsertOneModel().
-					SetDocument(recheckDoc)
-			}
+	var recheckBatches [][]mongo.WriteModel
+	var curRechecks []mongo.WriteModel
+	curBatchSize := 0
+	for i, dbName := range dbNames {
+		recheckDoc := RecheckDoc{
+			PrimaryKey: RecheckPrimaryKey{
+				SrcDatabaseName:   dbName,
+				SrcCollectionName: collNames[i],
+				DocumentID:        rawDocIDs[i],
+			},
+			DataSize: dataSizes[i],
+		}
+
+		recheckRaw, err := bson.Marshal(recheckDoc)
+		if err != nil {
+			return errors.Wrapf(err, "marshaling recheck for %#q", dbName+"."+collNames[i])
+		}
+
+		curRechecks = append(
+			curRechecks,
+			mongo.NewInsertOneModel().SetDocument(recheckDoc),
+		)
+		curBatchSize += len(recheckRaw)
+		if curBatchSize > batchByteLimit || len(recheckRaw) >= batchCountLimit {
+			recheckBatches = append(recheckBatches, curRechecks)
+			curRechecks = nil
+			curBatchSize = 0
+		}
+	}
+
+	if len(curRechecks) > 0 {
+		recheckBatches = append(recheckBatches, curRechecks)
+	}
+
+	for _, models := range recheckBatches {
+		eg.Go(func() error {
 
 			retryer := retry.New()
 			err := retryer.WithCallback(
@@ -156,14 +185,14 @@ func (verifier *Verifier) insertRecheckDocs(
 				len(models),
 			).Run(groupCtx, verifier.logger)
 
-			return errors.Wrapf(err, "failed to persist %d recheck(s) for generation %d", len(models), generation)
+			return errors.Wrapf(err, "batch of %d rechecks", len(models))
 		})
 	}
 
 	if err := eg.Wait(); err != nil {
 		return errors.Wrapf(
 			err,
-			"failed to persist %d recheck(s) for generation %d",
+			"persisting %d recheck(s) for generation %d",
 			len(documentIDs),
 			generation,
 		)
@@ -175,6 +204,80 @@ func (verifier *Verifier) insertRecheckDocs(
 		Msg("Persisted rechecks.")
 
 	return nil
+}
+
+func deduplicateRechecks(
+	dbNames, collNames []string,
+	documentIDs []any,
+	dataSizes []int,
+) ([]string, []string, []bson.RawValue, []int) {
+	dedupeMap := map[string]map[string]map[string]int{}
+
+	uniqueElems := 0
+
+	for i, dbName := range dbNames {
+		collName := collNames[i]
+		docID := documentIDs[i]
+		dataSize := dataSizes[i]
+
+		docIDRaw := mbson.MustConvertToRawValue(docID)
+
+		docIDStr := string(append(
+			[]byte{byte(docIDRaw.Type)},
+			docIDRaw.Value...,
+		))
+
+		if _, ok := dedupeMap[dbName]; !ok {
+			dedupeMap[dbName] = map[string]map[string]int{
+				collName: {
+					docIDStr: dataSize,
+				},
+			}
+
+			uniqueElems++
+
+			continue
+		}
+
+		if _, ok := dedupeMap[dbName][collName]; !ok {
+			dedupeMap[dbName][collName] = map[string]int{
+				docIDStr: dataSize,
+			}
+
+			uniqueElems++
+
+			continue
+		}
+
+		if _, ok := dedupeMap[dbName][collName][docIDStr]; !ok {
+			dedupeMap[dbName][collName][docIDStr] = dataSize
+			uniqueElems++
+		}
+	}
+
+	dbNames = make([]string, 0, uniqueElems)
+	collNames = make([]string, 0, uniqueElems)
+	rawDocIDs := make([]bson.RawValue, 0, uniqueElems)
+	dataSizes = make([]int, 0, uniqueElems)
+
+	for dbName, collMap := range dedupeMap {
+		for collName, docMap := range collMap {
+			for docIDStr, dataSize := range docMap {
+				dbNames = append(dbNames, dbName)
+				collNames = append(collNames, collName)
+				rawDocIDs = append(
+					rawDocIDs,
+					bson.RawValue{
+						Type:  []bsontype.Type(docIDStr)[0],
+						Value: []byte(docIDStr)[1:],
+					},
+				)
+				dataSizes = append(dataSizes, dataSize)
+			}
+		}
+	}
+
+	return dbNames, collNames, rawDocIDs, dataSizes
 }
 
 // DropOldRecheckQueueWhileLocked deletes the previous generation’s recheck
