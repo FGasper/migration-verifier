@@ -129,7 +129,7 @@ const perNsStatsPipelineTemplate = `[
 							{ "$ne": [ "$generation", 0 ] }
 						] }
 					] },
-					{"$size", "$_ids"},
+					{"$size": "$_ids"},
 					0
 				]
 			},
