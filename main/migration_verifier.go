@@ -215,16 +215,11 @@ func main() {
 
 				return verifier.CheckDriver(ctx, nil)
 			} else {
-				err := verifier.StartServer()
-				if err != nil {
-					return err
-				}
-
 				if cCtx.Bool(startFlag) {
 					verifier.Check(ctx, nil)
 				}
 
-				return nil
+				return verifier.StartServer()
 			}
 		},
 	}
