@@ -163,7 +163,7 @@ HandlerLoop:
 			}
 
 			ri.NoteSuccess(
-				"received %d-event batch from %s",
+				"received %d-event batch from %v",
 				len(batch.events),
 				batch.clusterTime,
 			)
@@ -180,7 +180,7 @@ HandlerLoop:
 			)
 
 			ri.NoteSuccess(
-				"handled %d-event batch from %s",
+				"handled %d-event batch from %v",
 				len(batch.events),
 				batch.clusterTime,
 			)

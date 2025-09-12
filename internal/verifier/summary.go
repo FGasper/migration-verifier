@@ -124,7 +124,7 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 		return false, false, err
 	}
 
-	fmt.Fprintf(strBuilder, "Mismatched or missing documents found: %d\n", discrepancies)
+	fmt.Fprintf(strBuilder, "Mismatched or missing documents found: %s\n", reportutils.FmtReal(discrepancies))
 
 	return true, anyAreIncomplete, nil
 }
