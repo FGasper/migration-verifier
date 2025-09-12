@@ -184,7 +184,7 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 	}
 
 	if err == nil {
-		verifier.PrintVerificationSummary(ctx, GenerationComplete)
+		verifier.PrintVerificationSummary(ctxIn, GenerationComplete)
 
 		verifier.logger.Debug().
 			Int("generation", generation).

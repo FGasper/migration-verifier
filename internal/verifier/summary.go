@@ -135,8 +135,8 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 	contentMismatchCount := 0
 	missingOrChangedCount := 0
 	for _, discrepancyCount := range taskDiscrepancyCounts {
-		contentMismatchCount += discrepancyCount.Mismatched
-		missingOrChangedCount += discrepancyCount.MissingOrChanged
+		contentMismatchCount += discrepancyCount.Mismatch
+		missingOrChangedCount += discrepancyCount.Missing
 	}
 
 	failureTypesTable.Append([]string{

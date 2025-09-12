@@ -43,9 +43,9 @@ func createMismatchesCollection(ctx context.Context, db *mongo.Database) error {
 }
 
 type perTaskMismatchCounts struct {
-	Task             primitive.ObjectID
-	Mismatched       int
-	MissingOrChanged int
+	Task     primitive.ObjectID
+	Mismatch int
+	Missing  int
 }
 
 func getPerTaskMismatchCounts(
