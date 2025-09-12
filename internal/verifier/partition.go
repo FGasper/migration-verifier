@@ -65,7 +65,7 @@ func (verifier *Verifier) createPartitionTasksWithSampleRate(
 		func(ctx context.Context, fi *retry.FuncInfo) error {
 			var err error
 
-			partitionsCount, docCount, byteCount, err = verifier.createPartitionTasksWithSampleRateRetryable(ctx, task)
+			partitionsCount, docCount, byteCount, err = verifier.createPartitionTasksWithSampleRateRetryable(ctx, task, fi)
 
 			return err
 		},
@@ -79,6 +79,7 @@ func (verifier *Verifier) createPartitionTasksWithSampleRate(
 func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 	ctx context.Context,
 	task *VerificationTask,
+	fi *retry.FuncInfo,
 ) (int, types.DocumentCount, types.ByteCount, error) {
 	srcColl := verifier.srcClientCollection(task)
 	srcNs := FullName(srcColl)
@@ -232,7 +233,11 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 		defer cursor.Close(ctx)
 		cursor.SetBatchSize(1)
 
+		partitionsCount := 0
 		for cursor.Next(ctx) {
+			partitionsCount++
+			fi.NoteSuccess("received partition boundary #%d", partitionsCount)
+
 			upperBound, err := cursor.Current.LookupErr("_id")
 			if err != nil {
 				return 0, 0, 0, errors.Wrapf(err, "fetching %#q from %#q’s sampling cursor", "_id", srcNs)
@@ -242,6 +247,8 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 			if err != nil {
 				return 0, 0, 0, err
 			}
+
+			fi.NoteSuccess("persisted partition #%d", partitionsCount)
 
 			lowerBound = upperBound
 		}

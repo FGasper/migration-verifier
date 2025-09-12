@@ -39,6 +39,7 @@ const (
 	partitionSizeMB       = "partitionSizeMB"
 	recheckMaxSizeMB      = "recheckMaxSizeMB"
 	checkOnly             = "checkOnly"
+	startFlag             = "start"
 	debugFlag             = "debug"
 	failureDisplaySize    = "failureDisplaySize"
 	ignoreReadConcernFlag = "ignoreReadConcern"
@@ -154,6 +155,10 @@ func main() {
 			Usage: "`Megabytes` to use for a partition.  Change only for debugging. 0 means use partitioner default.",
 		}),
 		altsrc.NewBoolFlag(cli.BoolFlag{
+			Name:  startFlag,
+			Usage: "Start verifying immediately",
+		}),
+		altsrc.NewBoolFlag(cli.BoolFlag{
 			Name:  debugFlag,
 			Usage: "Turn on debug logging",
 		}),
@@ -207,7 +212,16 @@ func main() {
 
 				return verifier.CheckDriver(ctx, nil)
 			} else {
-				return verifier.StartServer()
+				err := verifier.StartServer()
+				if err != nil {
+					return err
+				}
+
+				if cCtx.Bool(startFlag) {
+					verifier.Check(ctx, nil)
+				}
+
+				return nil
 			}
 		},
 	}
