@@ -157,8 +157,8 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 	printAll := int64(contentMismatchCount) < (verifier.failureDisplaySize + int64(0.25*float32(verifier.failureDisplaySize)))
 	limitOpt := lo.Ternary(
 		printAll,
-		option.Some(int(verifier.failureDisplaySize)),
 		option.None[int](),
+		option.Some(int(verifier.failureDisplaySize)),
 	)
 	taskDiscrepancies, err := getMismatchesForTasks(
 		ctx,
