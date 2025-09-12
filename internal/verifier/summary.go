@@ -191,10 +191,10 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 
 	if mismatchedDocsTableRows > 0 {
 		strBuilder.WriteString("\n")
-		if printAll {
-			strBuilder.WriteString("All documents in tasks in failed status due to differing content:\n")
+		if printAll || mismatchedDocsTableRows < verifier.failureDisplaySize {
+			strBuilder.WriteString("All documents found with differing content:\n")
 		} else {
-			fmt.Fprintf(strBuilder, "First %d documents in tasks in failed status due to differing content:\n", verifier.failureDisplaySize)
+			fmt.Fprintf(strBuilder, "First %d documents found with differing content:\n", verifier.failureDisplaySize)
 		}
 		mismatchedDocsTable.Render()
 	}
@@ -227,9 +227,9 @@ OUTB:
 	if missingOrChangedDocsTableRows > 0 {
 		strBuilder.WriteString("\n")
 		if printAll {
-			strBuilder.WriteString("All documents marked missing or changed:\n")
+			strBuilder.WriteString("All documents found missing or changed:\n")
 		} else {
-			fmt.Fprintf(strBuilder, "First %d documents marked missing or changed:\n", verifier.failureDisplaySize)
+			fmt.Fprintf(strBuilder, "First %d documents found missing or changed:\n", verifier.failureDisplaySize)
 		}
 		missingOrChangedDocsTable.Render()
 	}

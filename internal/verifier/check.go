@@ -184,11 +184,11 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 	}
 
 	if err == nil {
-		verifier.PrintVerificationSummary(ctxIn, GenerationComplete)
-
-		verifier.logger.Debug().
+		verifier.logger.Info().
 			Int("generation", generation).
-			Msg("Check finished.")
+			Msg("Check generation finished.")
+
+		verifier.PrintVerificationSummary(ctxIn, GenerationComplete)
 	}
 
 	return errors.Wrapf(
