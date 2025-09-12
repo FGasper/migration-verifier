@@ -3,6 +3,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
@@ -10,6 +11,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/10gen/migration-verifier/mslices"
+	"github.com/10gen/migration-verifier/mtime"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
@@ -103,15 +105,29 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 		}
 	})
 
+	activeWorkers := atomic.Int32{}
+	activeWorkers.Add(int32(verifier.numWorkers))
+
+	workersDone := make(chan struct{})
+
 	// Start the worker threads.
 	for i := 0; i < verifier.numWorkers; i++ {
 		eg.Go(func() error {
+			defer func() {
+				remaining := activeWorkers.Add(-1)
+
+				if remaining == 0 {
+					close(workersDone)
+				}
+			}()
+
 			return errors.Wrapf(
-				verifier.work(ctx, i),
+				verifier.work(ctx, generation, i),
 				"worker %d failed",
 				i,
 			)
 		})
+
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -121,6 +137,13 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 
 	eg.Go(func() error {
 		for {
+			select {
+			case <-workersDone:
+				canceler(errors.Errorf("generation %d finished (last worker finished)", generation))
+				return nil
+			default:
+			}
+
 			verificationStatus, err := verifier.GetVerificationStatus(ctx)
 			if err != nil {
 				return errors.Wrapf(
@@ -145,9 +168,8 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 			if verificationStatus.AddedTasks > 0 || verificationStatus.ProcessingTasks > 0 {
 				waitForTaskCreation++
 
-				time.Sleep(verifier.verificationStatusCheckInterval)
+				mtime.Sleep(ctx, verifier.verificationStatusCheckInterval)
 			} else {
-				verifier.PrintVerificationSummary(ctx, GenerationComplete)
 				finishedAllTasks = true
 				canceler(errors.Errorf("generation %d finished", generation))
 				return nil
@@ -162,6 +184,8 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 	}
 
 	if err == nil {
+		verifier.PrintVerificationSummary(ctx, GenerationComplete)
+
 		verifier.logger.Debug().
 			Int("generation", generation).
 			Msg("Check finished.")
@@ -532,7 +556,11 @@ func FetchFailedAndIncompleteTasks(
 }
 
 // work is the logic for an individual worker thread.
-func (verifier *Verifier) work(ctx context.Context, workerNum int) error {
+func (verifier *Verifier) work(
+	ctx context.Context,
+	generation int,
+	workerNum int,
+) error {
 	verifier.logger.Debug().
 		Int("workerNum", workerNum).
 		Msg("Worker started.")
@@ -562,6 +590,9 @@ func (verifier *Verifier) work(ctx context.Context, workerNum int) error {
 
 		task, gotTask := taskOpt.Get()
 		if !gotTask {
+			if generation > 0 {
+				return nil
+			}
 			duration := verifier.workerSleepDelay
 
 			if duration > 0 {
