@@ -14,6 +14,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/option"
 	"github.com/olekukonko/tablewriter"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
@@ -58,6 +59,7 @@ func (verifier *Verifier) reportCollectionMetadataMismatches(ctx context.Context
 					return ft.PrimaryKey
 				},
 			),
+			option.None[int](),
 		)
 		if err != nil {
 			return false, false, errors.Wrapf(
@@ -110,46 +112,31 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 	failureTypesTable := tablewriter.NewWriter(strBuilder)
 	failureTypesTable.SetHeader([]string{"Failure Type", "Count"})
 
-	taskDiscrepancies, err := getMismatchesForTasks(
+	failedTaskIDs := lo.Map(
+		failedTasks,
+		func(ft VerificationTask, _ int) primitive.ObjectID {
+			return ft.PrimaryKey
+		},
+	)
+
+	taskDiscrepancyCounts, err := getPerTaskMismatchCounts(
 		ctx,
 		verifier.verificationDatabase(),
-		lo.Map(
-			failedTasks,
-			func(ft VerificationTask, _ int) primitive.ObjectID {
-				return ft.PrimaryKey
-			},
-		),
+		failedTaskIDs,
 	)
 	if err != nil {
 		return false, false, errors.Wrapf(
 			err,
-			"fetching %d failed tasks' discrepancies",
+			"analyzing %d failed tasks' discrepancies",
 			len(failedTasks),
 		)
 	}
 
 	contentMismatchCount := 0
 	missingOrChangedCount := 0
-	for _, task := range failedTasks {
-		discrepancies, hasDiscrepancies := taskDiscrepancies[task.PrimaryKey]
-		if !hasDiscrepancies {
-			return false, false, errors.Wrapf(
-				err,
-				"task %v is marked %#q but has no recorded discrepancies; internal error?",
-				task.PrimaryKey,
-				task.Status,
-			)
-		}
-
-		missingCount := lo.CountBy(
-			discrepancies,
-			func(d VerificationResult) bool {
-				return d.DocumentIsMissing()
-			},
-		)
-
-		contentMismatchCount += len(discrepancies) - missingCount
-		missingOrChangedCount += missingCount
+	for _, discrepancyCount := range taskDiscrepancyCounts {
+		contentMismatchCount += discrepancyCount.Mismatched
+		missingOrChangedCount += discrepancyCount.MissingOrChanged
 	}
 
 	failureTypesTable.Append([]string{
@@ -168,15 +155,27 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 	mismatchedDocsTable.SetHeader([]string{"ID", "Cluster", "Field", "Namespace", "Details"})
 
 	printAll := int64(contentMismatchCount) < (verifier.failureDisplaySize + int64(0.25*float32(verifier.failureDisplaySize)))
-OUTA:
-	for _, task := range failedTasks {
-		for _, d := range taskDiscrepancies[task.PrimaryKey] {
+	limitOpt := lo.Ternary(
+		printAll,
+		option.Some(int(verifier.failureDisplaySize)),
+		option.None[int](),
+	)
+	taskDiscrepancies, err := getMismatchesForTasks(
+		ctx,
+		verifier.verificationDatabase(),
+		failedTaskIDs,
+		limitOpt,
+	)
+
+	for _, taskID := range failedTaskIDs {
+		discrepancies, ok := taskDiscrepancies[taskID]
+		if !ok {
+			continue
+		}
+
+		for _, d := range discrepancies {
 			if d.DocumentIsMissing() {
 				continue
-			}
-
-			if !printAll && mismatchedDocsTableRows >= verifier.failureDisplaySize {
-				break OUTA
 			}
 
 			mismatchedDocsTableRows++

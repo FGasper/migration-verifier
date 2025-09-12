@@ -134,7 +134,11 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 // RunChangeEventHandler handles change event batches from the reader.
 // It needs to be started after the reader starts and should run in its own
 // goroutine.
-func (verifier *Verifier) RunChangeEventHandler(ctx context.Context, reader *ChangeStreamReader) error {
+func (verifier *Verifier) RunChangeEventHandler(
+	ctx context.Context,
+	ri *retry.FuncInfo,
+	reader *ChangeStreamReader,
+) error {
 	var err error
 
 HandlerLoop:
@@ -263,7 +267,7 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 	latestTimestampTime := time.Unix(int64(latestTimestamp.T), 0)
 	lag := time.Unix(int64(batch.clusterTime.T), 0).Sub(latestTimestampTime)
 
-	verifier.logger.Debug().
+	verifier.logger.Trace().
 		Str("origin", string(eventOrigin)).
 		Int("count", len(docIDs)).
 		Any("latestTimestamp", latestTimestamp).

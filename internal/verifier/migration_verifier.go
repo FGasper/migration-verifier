@@ -457,7 +457,7 @@ func (verifier *Verifier) getGenerationWhileLocked() (int, bool) {
 
 func (verifier *Verifier) maybeAppendGlobalFilterToPredicates(predicates bson.A) bson.A {
 	if len(verifier.globalFilter) == 0 {
-		verifier.logger.Debug().Msg("No filter to append; globalFilter is nil")
+		verifier.logger.Trace().Msg("No filter to append; globalFilter is nil")
 		return predicates
 	}
 	verifier.logger.Debug().Str("filter", fmt.Sprintf("%v", verifier.globalFilter)).Msg("Appending filter to find query")
@@ -632,6 +632,7 @@ func (verifier *Verifier) ProcessVerifyTask(ctx context.Context, workerNum int, 
 
 		err = recordMismatches(
 			ctx,
+			verifier.logger,
 			verifier.metaClient.Database(verifier.metaDBName),
 			task.PrimaryKey,
 			problems,
@@ -1131,6 +1132,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(
 	if specificationProblems != nil {
 		err := recordMismatches(
 			ctx,
+			verifier.logger,
 			verifier.verificationDatabase(),
 			task.PrimaryKey,
 			specificationProblems,
@@ -1179,6 +1181,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(
 
 		err := recordMismatches(
 			ctx,
+			verifier.logger,
 			verifier.verificationDatabase(),
 			task.PrimaryKey,
 			indexProblems,
@@ -1209,6 +1212,7 @@ func (verifier *Verifier) verifyMetadataAndPartitionCollection(
 
 		err := recordMismatches(
 			ctx,
+			verifier.logger,
 			verifier.verificationDatabase(),
 			task.PrimaryKey,
 			shardingProblems,

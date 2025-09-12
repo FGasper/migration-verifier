@@ -264,7 +264,12 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 				return errors.Wrapf(err, "failed to start %s", csReader)
 			}
 			ceHandlerGroup.Go(func() error {
-				return verifier.RunChangeEventHandler(groupCtx, csReader)
+				return retry.New().WithCallback(
+					func(ctx context.Context, ri *retry.FuncInfo) error {
+						return verifier.RunChangeEventHandler(ctx, ri, csReader)
+					},
+					"handling change events",
+				).Run(groupCtx, verifier.logger)
 			})
 		}
 	}
@@ -494,8 +499,11 @@ func FetchFailedAndIncompleteTasks(
 	err := retry.New().WithCallback(
 		func(ctx context.Context, _ *retry.FuncInfo) error {
 			cur, err := coll.Find(ctx, bson.D{
-				bson.E{Key: "type", Value: taskType},
-				bson.E{Key: "generation", Value: generation},
+				{"generation", generation},
+				{"type", taskType},
+				{"status", bson.D{
+					{"$nin", mslices.Of(verificationTaskCompleted)},
+				}},
 			})
 			if err != nil {
 				return err

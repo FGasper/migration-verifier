@@ -35,8 +35,9 @@ func (verifier *Verifier) handleIncompletePrimary(ctx mongo.SessionContext) (boo
 	cursor, err := taskColl.Find(
 		ctx,
 		bson.M{
-			"type":   verificationTaskPrimary,
-			"status": bson.M{"$ne": verificationTaskCompleted},
+			"generation": 0,
+			"type":       verificationTaskPrimary,
+			"status":     bson.M{"$ne": verificationTaskCompleted},
 		},
 	)
 	if err != nil {
