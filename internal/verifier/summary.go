@@ -108,10 +108,6 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 
 	strBuilder.WriteString("\n")
 
-	// First present summaries of failures based on present/missing and differing content
-	failureTypesTable := tablewriter.NewWriter(strBuilder)
-	failureTypesTable.SetHeader([]string{"Failure Type", "Count"})
-
 	failedTaskIDs := lo.Map(
 		failedTasks,
 		func(ft VerificationTask, _ int) primitive.ObjectID {
@@ -119,120 +115,16 @@ func (verifier *Verifier) reportDocumentMismatches(ctx context.Context, strBuild
 		},
 	)
 
-	taskDiscrepancyCounts, err := getPerTaskMismatchCounts(
+	discrepancies, err := totalTaskDiscrepancies(
 		ctx,
 		verifier.verificationDatabase(),
 		failedTaskIDs,
 	)
 	if err != nil {
-		return false, false, errors.Wrapf(
-			err,
-			"analyzing %d failed tasks' discrepancies",
-			len(failedTasks),
-		)
+		return false, false, err
 	}
 
-	contentMismatchCount := 0
-	missingOrChangedCount := 0
-	for _, discrepancyCount := range taskDiscrepancyCounts {
-		contentMismatchCount += discrepancyCount.Mismatch
-		missingOrChangedCount += discrepancyCount.Missing
-	}
-
-	failureTypesTable.Append([]string{
-		"Documents With Differing Content",
-		fmt.Sprintf("%v", reportutils.FmtReal(contentMismatchCount)),
-	})
-	failureTypesTable.Append([]string{
-		"Missing or Changed Documents",
-		fmt.Sprintf("%v", reportutils.FmtReal(missingOrChangedCount)),
-	})
-	strBuilder.WriteString("Failure summary:\n")
-	failureTypesTable.Render()
-
-	mismatchedDocsTable := tablewriter.NewWriter(strBuilder)
-	mismatchedDocsTableRows := types.ToNumericTypeOf(0, verifier.failureDisplaySize)
-	mismatchedDocsTable.SetHeader([]string{"ID", "Cluster", "Field", "Namespace", "Details"})
-
-	printAll := int64(contentMismatchCount) < (verifier.failureDisplaySize + int64(0.25*float32(verifier.failureDisplaySize)))
-	limitOpt := lo.Ternary(
-		printAll,
-		option.None[int](),
-		option.Some(int(verifier.failureDisplaySize)),
-	)
-	taskDiscrepancies, err := getMismatchesForTasks(
-		ctx,
-		verifier.verificationDatabase(),
-		failedTaskIDs,
-		limitOpt,
-	)
-
-	for _, taskID := range failedTaskIDs {
-		discrepancies, ok := taskDiscrepancies[taskID]
-		if !ok {
-			continue
-		}
-
-		for _, d := range discrepancies {
-			if d.DocumentIsMissing() {
-				continue
-			}
-
-			mismatchedDocsTableRows++
-			mismatchedDocsTable.Append([]string{
-				fmt.Sprintf("%v", d.ID),
-				fmt.Sprintf("%v", d.Cluster),
-				fmt.Sprintf("%v", d.Field),
-				fmt.Sprintf("%v", d.NameSpace),
-				fmt.Sprintf("%v", d.Details),
-			})
-		}
-	}
-
-	if mismatchedDocsTableRows > 0 {
-		strBuilder.WriteString("\n")
-		if printAll || mismatchedDocsTableRows < verifier.failureDisplaySize {
-			strBuilder.WriteString("All documents found with differing content:\n")
-		} else {
-			fmt.Fprintf(strBuilder, "First %d documents found with differing content:\n", verifier.failureDisplaySize)
-		}
-		mismatchedDocsTable.Render()
-	}
-
-	missingOrChangedDocsTable := tablewriter.NewWriter(strBuilder)
-	missingOrChangedDocsTableRows := types.ToNumericTypeOf(0, verifier.failureDisplaySize)
-	missingOrChangedDocsTable.SetHeader([]string{"Document ID", "Source Namespace", "Destination Namespace"})
-
-	printAll = int64(missingOrChangedCount) < (verifier.failureDisplaySize + int64(0.25*float32(verifier.failureDisplaySize)))
-OUTB:
-	for _, task := range failedTasks {
-		for _, d := range taskDiscrepancies[task.PrimaryKey] {
-			if !d.DocumentIsMissing() {
-				continue
-			}
-
-			if !printAll && missingOrChangedDocsTableRows >= verifier.failureDisplaySize {
-				break OUTB
-			}
-
-			missingOrChangedDocsTableRows++
-			missingOrChangedDocsTable.Append([]string{
-				fmt.Sprintf("%v", d.ID),
-				fmt.Sprintf("%v", task.QueryFilter.Namespace),
-				fmt.Sprintf("%v", task.QueryFilter.To),
-			})
-		}
-	}
-
-	if missingOrChangedDocsTableRows > 0 {
-		strBuilder.WriteString("\n")
-		if printAll {
-			strBuilder.WriteString("All documents found missing or changed:\n")
-		} else {
-			fmt.Fprintf(strBuilder, "First %d documents found missing or changed:\n", verifier.failureDisplaySize)
-		}
-		missingOrChangedDocsTable.Render()
-	}
+	fmt.Fprintf(strBuilder, "Mismatched or missing documents found: %d\n", discrepancies)
 
 	return true, anyAreIncomplete, nil
 }

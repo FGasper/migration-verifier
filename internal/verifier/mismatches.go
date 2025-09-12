@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/retry"
@@ -40,6 +41,38 @@ func createMismatchesCollection(ctx context.Context, db *mongo.Database) error {
 	}
 
 	return nil
+}
+
+func totalTaskDiscrepancies(
+	ctx context.Context,
+	db *mongo.Database,
+	taskIDs []primitive.ObjectID,
+) (int, error) {
+	cursor, err := db.Collection(mismatchesCollectionName).Aggregate(
+		ctx,
+		mongo.Pipeline{
+			{{"$match", bson.D{
+				{"task", bson.D{{"$in", taskIDs}}},
+			}}},
+			{{"$group", bson.D{
+				{"_id", ""},
+				{"count", bson.D{{"$sum", 1}}},
+			}}},
+		},
+	)
+	if err != nil {
+		return 0, errors.Wrapf(err, "requesting discrepancies total for %d task(s)", len(taskIDs))
+	}
+
+	for cursor.Next(ctx) {
+		return int(cursor.Current.Lookup("count").AsInt64()), nil
+	}
+
+	if cursor.Err() != nil {
+		return 0, errors.Wrapf(cursor.Err(), "fetching discrepancies total for for %d task(s)", len(taskIDs))
+	}
+
+	return 0, fmt.Errorf("no count of discrepanices??")
 }
 
 type perTaskMismatchCounts struct {
