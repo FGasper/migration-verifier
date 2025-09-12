@@ -268,7 +268,8 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 					func(ctx context.Context, ri *retry.FuncInfo) error {
 						return verifier.RunChangeEventHandler(ctx, ri, csReader)
 					},
-					"handling change events",
+					"handling %s change events",
+					csReader.readerType,
 				).Run(groupCtx, verifier.logger)
 			})
 		}

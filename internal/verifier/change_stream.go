@@ -153,12 +153,20 @@ HandlerLoop:
 				Msg("Change event handler failed.")
 		case batch, more := <-reader.changeEventBatchChan:
 			if !more {
+				ri.NoteSuccess("batch channel is closed")
+
 				verifier.logger.Debug().
 					Stringer("changeStreamReader", reader).
 					Msg("Change event batch channel has been closed.")
 
 				break HandlerLoop
 			}
+
+			ri.NoteSuccess(
+				"received %d-event batch from %s",
+				len(batch.events),
+				batch.clusterTime,
+			)
 
 			verifier.logger.Trace().
 				Stringer("changeStreamReader", reader).
@@ -169,6 +177,12 @@ HandlerLoop:
 			err = errors.Wrap(
 				verifier.HandleChangeStreamEvents(ctx, batch, reader.readerType),
 				"failed to handle change stream events",
+			)
+
+			ri.NoteSuccess(
+				"handled %d-event batch from %s",
+				len(batch.events),
+				batch.clusterTime,
 			)
 		}
 	}

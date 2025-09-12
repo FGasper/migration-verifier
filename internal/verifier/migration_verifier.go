@@ -1338,9 +1338,8 @@ func (verifier *Verifier) GetVerificationStatus(ctx context.Context) (*Verificat
 	verificationStatus := VerificationStatus{}
 
 	for _, result := range results {
-		status := result.Lookup("_id").String()
-		// Status is returned with quotes around it so remove those
-		status = status[1 : len(status)-1]
+		status := result.Lookup("_id").StringValue()
+
 		count := int(result.Lookup("count").Int32())
 		verificationStatus.TotalTasks += int(count)
 		switch verificationTaskStatus(status) {
