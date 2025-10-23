@@ -744,6 +744,11 @@ func (csr *ChangeStreamReader) createChangeStream(
 		{"hint", bson.D{{"$natural", 1}}},
 		{"tailable", true},
 		{"awaitData", true},
+		{"filter", bson.D{
+			{"ts", bson.D{{"$gt", primitive.Timestamp{
+				T: uint32(time.Now().Unix()),
+			}}}},
+		}},
 		{"projection", bson.D{
 			{"clusterTime", "$ts"},
 			{"ns", 1},
