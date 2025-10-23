@@ -545,6 +545,10 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 					return err
 				}
 
+				if err := csCursor.GetNext(ctx); err != nil {
+					return errors.Wrap(err, "reading change stream")
+				}
+
 				rt, err := cursor.GetResumeToken(csCursor)
 				if err != nil {
 					return errors.Wrap(err, "extracting resume token")
@@ -570,6 +574,10 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 
 		default:
 			err = csr.readAndHandleOneChangeEventBatch(ctx, ri, csCursor)
+
+			if err := csCursor.GetNext(ctx); err != nil {
+				return errors.Wrap(err, "reading change stream")
+			}
 
 			if err == nil {
 				err = persistResumeTokenIfNeeded()
