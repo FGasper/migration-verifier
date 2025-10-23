@@ -741,6 +741,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 	cmd := bson.D{
 		{"find", "oplog.rs"},
 		{"$_requestResumeToken", true},
+		{"hint", bson.D{{"$natural", 1}}},
 		{"tailable", true},
 		{"awaitData", true},
 		{"projection", bson.D{
