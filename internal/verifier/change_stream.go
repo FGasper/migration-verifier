@@ -676,10 +676,16 @@ func (csr *ChangeStreamReader) createChangeStream(
 		)},
 	}
 
+	sess, err := csr.watcherClient.StartSession()
+	if err != nil {
+		return nil, primitive.Timestamp{}, errors.Wrap(err, "failed to start session")
+	}
+	sctx := mongo.NewSessionContext(ctx, sess)
+
 	adminDB := csr.watcherClient.Database("admin")
 
 	result := adminDB.RunCommand(
-		ctx,
+		sctx,
 		aggregateCmd,
 	)
 
