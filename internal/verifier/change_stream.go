@@ -1036,7 +1036,10 @@ func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Contex
 }
 
 func extractTimestampFromResumeToken(resumeToken bson.Raw) (primitive.Timestamp, error) {
-	tokenDataRV := lo.Must(resumeToken.LookupErr("_data"))
+	tokenDataRV, err := resumeToken.LookupErr("_data")
+	if err != nil {
+		return primitive.Timestamp{}, errors.Wrapf(err, "getting %#q from resume token %v", "_data", resumeToken)
+	}
 	tokenData := lo.Must(mbson.CastRawValue[string](tokenDataRV))
 
 	resumeTokenBson, err := keystring.KeystringToBson(keystring.V1, tokenData)
