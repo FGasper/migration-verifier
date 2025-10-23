@@ -53,8 +53,8 @@ func (c *Cursor) GetClusterTime() (primitive.Timestamp, error) {
 		)
 	}
 
-	var ts primitive.Timestamp
-	if err := ctRV.Unmarshal(&ts); err != nil {
+	ts, err := mbson.CastRawValue[primitive.Timestamp](ctRV)
+	if err != nil {
 		return primitive.Timestamp{}, errors.Wrapf(
 			err,
 			"parsing server response’s %#q",
