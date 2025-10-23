@@ -3,6 +3,8 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,7 +26,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"golang.org/x/exp/slices"
 )
 
 type ddlEventHandling string
@@ -35,11 +36,15 @@ const (
 	onDDLEventAllow ddlEventHandling = "allow"
 )
 
+var opTypeToEventType = map[string]string{
+	"i": "insert",
+	"d": "delete",
+	"u": "update",
+	"r": "replace",
+}
+
 var supportedEventOpTypes = mapset.NewSet(
-	"insert",
-	"update",
-	"replace",
-	"delete",
+	slices.Collect(maps.Values(opTypeToEventType))...,
 )
 
 // ParsedEvent contains the fields of an event that we have parsed from 'bson.Raw'.
@@ -377,10 +382,14 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		batchTotalBytes += len(rawEvent)
 
 		var curOp = struct {
+			Op          string
 			ClusterTime primitive.Timestamp
+			Type        string
 			Ns          string
 			DocID       bson.RawValue `bson:"_docID,omitempty"`
 			Ops         []struct {
+				Op    string
+				Type  string
 				Ns    string
 				DocID bson.RawValue `bson:"_docID,omitempty"`
 			}
@@ -401,7 +410,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 				db, coll, _ := strings.Cut(subOp.Ns, ".")
 
 				newEvent := ParsedEvent{
-					OpType:      "insert",
+					OpType:      opTypeToEventType[subOp.Op],
 					Ns:          &Namespace{db, coll},
 					DocID:       subOp.DocID,
 					ClusterTime: &curOp.ClusterTime,
@@ -416,7 +425,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			db, coll, _ := strings.Cut(curOp.Ns, ".")
 
 			newEvent := ParsedEvent{
-				OpType:      "insert",
+				OpType:      opTypeToEventType[curOp.Op],
 				Ns:          &Namespace{db, coll},
 				DocID:       curOp.DocID,
 				ClusterTime: &curOp.ClusterTime,
@@ -782,6 +791,14 @@ func (csr *ChangeStreamReader) createChangeStream(
 		{"projection", bson.D{
 			{"clusterTime", "$ts"},
 			{"ns", 1},
+			{"op", agg.Cond{
+				If: agg.And{
+					agg.Eq("$op", "u"),
+					agg.Not{agg.Eq("missing", agg.Type("$o2._id"))},
+				},
+				Then: "r",
+				Else: "$op",
+			}},
 			{"_docID", agg.Cond{
 				If:   agg.In("$op", "i", "d"),
 				Then: "$o._id",
@@ -802,6 +819,14 @@ func (csr *ChangeStreamReader) createChangeStream(
 					In: agg.Cond{
 						If: makeOplogSingleOpFilterExpr("$$opEntry", []string{"d", "i", "u"}),
 						Then: bson.D{
+							{"op", agg.Cond{
+								If: agg.And{
+									agg.Eq("$$opEntry.op", "u"),
+									agg.Not{agg.Eq("missing", agg.Type("$$opEntry.o2._id"))},
+								},
+								Then: "r",
+								Else: "$$opEntry.op",
+							}},
 							{"ns", "$$opEntry.ns"},
 							{"_docID", agg.Cond{
 								If:   agg.In("$$opEntry.op", "i", "d"),
