@@ -11,6 +11,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/10gen/migration-verifier/mbson"
+	"github.com/10gen/migration-verifier/mmongo/agg"
 	"github.com/10gen/migration-verifier/mmongo/cursor"
 	"github.com/10gen/migration-verifier/msync"
 	"github.com/10gen/migration-verifier/option"
@@ -668,15 +669,60 @@ func (csr *ChangeStreamReader) createChangeStream(
 		csStartLogEvent.Msgf("Starting change stream from current %s cluster time.", csr.readerType)
 	}
 
-	aggregateCmd := bson.D{
-		{"aggregate", 1},
-		{"cursor", bson.D{}},
-		{"pipeline", append(
-			mongo.Pipeline{
-				{{"$changeStream", changeStreamStage}},
-			},
-			csr.GetChangeStreamFilter()...,
-		)},
+	/*
+		cmd := bson.D{
+			{"aggregate", 1},
+			{"cursor", bson.D{}},
+			{"pipeline", append(
+				mongo.Pipeline{
+					{{"$changeStream", changeStreamStage}},
+				},
+				csr.GetChangeStreamFilter()...,
+			)},
+		}
+	*/
+
+	cmd := bson.D{
+		{"find", "oplog.rs"},
+		{"$_requestResumeToken", true},
+		{"tailable", true},
+		{"awaitData", true},
+		{"projection", bson.D{
+			{"clusterTime", "$ts"},
+			{"ns", 1},
+			{"_docID", agg.Cond{
+				If:   agg.In("$op", "i", "d"),
+				Then: "$o._id",
+				Else: agg.Cond{
+					If:   agg.Eq("$op", "u"),
+					Then: "$o2._id",
+					Else: "$$REMOVE",
+				},
+			}},
+			{"ops", agg.Cond{
+				If: agg.And{
+					agg.Eq("$op", "c"),
+					agg.Eq("array", agg.Type("$o.applyOps")),
+				},
+				Then: agg.Map{
+					Input: "$o.applyOps",
+					As:    "opEntry",
+					In: bson.D{
+						{"ns", "$$opEntry.ns"},
+						{"_docID", agg.Cond{
+							If:   agg.In("$$opEntry.op", "i", "d"),
+							Then: "$$opEntry.o._id",
+							Else: agg.Cond{
+								If:   agg.Eq("$$opEntry.op", "u"),
+								Then: "$$opEntry.o2._id",
+								Else: "$$REMOVE",
+							},
+						}},
+					},
+				},
+			}},
+		}},
+		// resumeToken
 	}
 
 	sess, err := csr.watcherClient.StartSession()
@@ -685,14 +731,11 @@ func (csr *ChangeStreamReader) createChangeStream(
 	}
 	sctx := mongo.NewSessionContext(ctx, sess)
 
-	adminDB := sess.Client().Database("admin")
+	db := sess.Client().Database("local")
 
-	result := adminDB.RunCommand(
-		sctx,
-		aggregateCmd,
-	)
+	result := db.RunCommand(sctx, cmd)
 
-	myCursor, err := cursor.New(adminDB, result)
+	myCursor, err := cursor.New(db, result)
 	if err != nil {
 		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "opening change stream")
 	}
