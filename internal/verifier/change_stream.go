@@ -24,7 +24,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/exp/slices"
 )
 
@@ -962,37 +961,40 @@ func (csr *ChangeStreamReader) resumeTokenDocID() string {
 }
 
 func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Context, csCursor *cursor.Cursor) error {
-	token, err := cursor.GetResumeToken(csCursor)
-	if err != nil {
-		return errors.Wrapf(err, "extracting resume token")
-	}
-
-	coll := csr.getChangeStreamMetadataCollection()
-	_, err = coll.ReplaceOne(
-		ctx,
-		bson.D{{"_id", csr.resumeTokenDocID()}},
-		token,
-		options.Replace().SetUpsert(true),
-	)
-
-	if err == nil {
-		ts, err := extractTimestampFromResumeToken(token)
-
-		logEvent := csr.logger.Debug()
-
-		if err == nil {
-			logEvent = addTimestampToLogEvent(ts, logEvent)
-		} else {
-			csr.logger.Warn().Err(err).
-				Msg("failed to extract resume token timestamp")
+	return nil
+	/*
+		token, err := cursor.GetResumeToken(csCursor)
+		if err != nil {
+			return errors.Wrapf(err, "extracting resume token")
 		}
 
-		logEvent.Msgf("Persisted %s's resume token.", csr)
+		coll := csr.getChangeStreamMetadataCollection()
+		_, err = coll.ReplaceOne(
+			ctx,
+			bson.D{{"_id", csr.resumeTokenDocID()}},
+			token,
+			options.Replace().SetUpsert(true),
+		)
 
-		return nil
-	}
+		if err == nil {
+			ts, err := extractTimestampFromResumeToken(token)
 
-	return errors.Wrapf(err, "failed to persist change stream resume token (%v)", token)
+			logEvent := csr.logger.Debug()
+
+			if err == nil {
+				logEvent = addTimestampToLogEvent(ts, logEvent)
+			} else {
+				csr.logger.Warn().Err(err).
+					Msg("failed to extract resume token timestamp")
+			}
+
+			logEvent.Msgf("Persisted %s's resume token.", csr)
+
+			return nil
+		}
+
+		return errors.Wrapf(err, "failed to persist change stream resume token (%v)", token)
+	*/
 }
 
 func extractTimestampFromResumeToken(resumeToken bson.Raw) (primitive.Timestamp, error) {
