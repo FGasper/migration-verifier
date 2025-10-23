@@ -181,11 +181,11 @@ OUTA:
 
 			mismatchedDocsTableRows++
 			mismatchedDocsTable.Append([]string{
-				fmt.Sprintf("%v", d.ID),
+				d.ID.String(),
 				fmt.Sprintf("%v", d.Cluster),
-				fmt.Sprintf("%v", d.Field),
-				fmt.Sprintf("%v", d.NameSpace),
-				fmt.Sprintf("%v", d.Details),
+				d.Field,
+				d.NameSpace,
+				d.Details,
 			})
 		}
 	}
@@ -218,9 +218,9 @@ OUTB:
 
 			missingOrChangedDocsTableRows++
 			missingOrChangedDocsTable.Append([]string{
-				fmt.Sprintf("%v", d.ID),
-				fmt.Sprintf("%v", task.QueryFilter.Namespace),
-				fmt.Sprintf("%v", task.QueryFilter.To),
+				d.ID.String(),
+				task.QueryFilter.Namespace,
+				task.QueryFilter.To,
 			})
 		}
 	}
