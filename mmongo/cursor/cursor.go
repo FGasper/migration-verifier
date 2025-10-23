@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/10gen/migration-verifier/mbson"
 	"github.com/10gen/migration-verifier/mslices"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
@@ -195,7 +196,8 @@ func GetResumeToken(c *Cursor) (bson.Raw, error) {
 		return nil, errors.Wrapf(err, "extracting change stream’s resume token")
 	}
 
-	if err := tokenRV.Unmarshal(&resumeToken); err != nil {
+	resumeToken, err = mbson.CastRawValue[bson.Raw](tokenRV)
+	if err != nil {
 		return nil, errors.Wrap(
 			err,
 			"parsing change stream’s resume token",
