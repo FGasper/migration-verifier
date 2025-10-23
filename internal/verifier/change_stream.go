@@ -648,6 +648,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 			changeStreamStage,
 			bson.D{
 				{"startAfter", savedResumeToken},
+				{"maxAwaitTimeMS", maxChangeStreamAwaitTime.Milliseconds()},
 			}...,
 		)
 	} else {
@@ -656,9 +657,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 	aggregateCmd := bson.D{
 		{"aggregate", 1},
-		{"cursor", bson.D{
-			{"maxAwaitTimeMS", maxChangeStreamAwaitTime.Milliseconds()},
-		}},
+		{"cursor", bson.D{}},
 		{"pipeline", append(
 			mongo.Pipeline{
 				{{"$changeStream", changeStreamStage}},
