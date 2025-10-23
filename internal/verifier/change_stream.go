@@ -10,6 +10,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mbson"
 	"github.com/10gen/migration-verifier/mmongo/cursor"
 	"github.com/10gen/migration-verifier/msync"
 	"github.com/10gen/migration-verifier/option"
@@ -17,6 +18,7 @@ import (
 	clone "github.com/huandu/go-clone/generic"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+	"github.com/samber/lo"
 	"github.com/samber/mo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -876,17 +878,10 @@ func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Contex
 }
 
 func extractTimestampFromResumeToken(resumeToken bson.Raw) (primitive.Timestamp, error) {
-	tokenStruct := struct {
-		Data string `bson:"_data"`
-	}{}
+	tokenDataRV := lo.Must(resumeToken.LookupErr("_data"))
+	tokenData := lo.Must(mbson.CastRawValue[string](tokenDataRV))
 
-	// Change stream token is always a V1 keystring in the _data field
-	err := bson.Unmarshal(resumeToken, &tokenStruct)
-	if err != nil {
-		return primitive.Timestamp{}, errors.Wrapf(err, "failed to extract %#q from resume token (%v)", "_data", resumeToken)
-	}
-
-	resumeTokenBson, err := keystring.KeystringToBson(keystring.V1, tokenStruct.Data)
+	resumeTokenBson, err := keystring.KeystringToBson(keystring.V1, tokenData)
 	if err != nil {
 		return primitive.Timestamp{}, err
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 type bsonType interface {
-	bson.Raw | primitive.Timestamp
+	bson.Raw | primitive.Timestamp | string
 }
 
 type cannotCastErr struct {
@@ -37,6 +37,10 @@ func CastRawValue[T bsonType](in bson.RawValue) (T, error) {
 	case primitive.Timestamp:
 		if t, i, ok := in.TimestampOK(); ok {
 			return any(primitive.Timestamp{t, i}).(T), nil
+		}
+	case string:
+		if str, ok := in.StringValueOK(); ok {
+			return any(str).(T), nil
 		}
 	default:
 		panic(fmt.Sprintf("Unrecognized Go type: %T (maybe augment bsonType?)", *retPtr))
