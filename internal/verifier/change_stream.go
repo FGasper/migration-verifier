@@ -578,7 +578,7 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 		default:
 			err = csr.readAndHandleOneChangeEventBatch(ctx, ri, csCursor)
 
-			if err := csCursor.GetNext(ctx); err != nil {
+			if err := csCursor.GetNext(sessCtx); err != nil {
 				return errors.Wrap(err, "reading change stream")
 			}
 
