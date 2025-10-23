@@ -674,6 +674,29 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 	return nil
 }
 
+func makeOplogSingleOpFilterExpr(opRef string, opsToAccept []string) any {
+	return agg.And{
+		agg.In(opRef+".op", opsToAccept...),
+		agg.Not{agg.Eq(
+			agg.SubstrBytes{opRef + ".ns", 0, 7},
+			"config.",
+		)},
+		agg.Not{agg.Eq(
+			agg.SubstrBytes{opRef + ".ns", 0, 6},
+			"admin.",
+		)},
+	}
+}
+
+var oplogQueryExpr = agg.Or{
+	makeOplogSingleOpFilterExpr("$$ROOT", []string{"d", "i", "u"}),
+	agg.And{
+		agg.Eq("$op", "c"),
+		agg.Eq("$ns", "admin.$cmd"),
+		agg.Eq(agg.Type("$o.applyOps"), "array"),
+	},
+}
+
 func (csr *ChangeStreamReader) createChangeStream(
 	ctx context.Context,
 ) (*cursor.Cursor, mongo.Session, primitive.Timestamp, error) {
@@ -744,10 +767,16 @@ func (csr *ChangeStreamReader) createChangeStream(
 		{"hint", bson.D{{"$natural", 1}}},
 		{"tailable", true},
 		{"awaitData", true},
-		{"filter", bson.D{
-			{"ts", bson.D{{"$gt", primitive.Timestamp{
-				T: uint32(time.Now().Unix()),
-			}}}},
+		{"filter", agg.And{
+			bson.D{
+				{"ts", bson.D{{"$gt", primitive.Timestamp{
+					T: uint32(time.Now().Unix()),
+				}}}},
+			},
+			bson.D{{"$expr", agg.Or{
+				oplogQueryExpr,
+				agg.Eq("$op", "n"),
+			}}},
 		}},
 		{"projection", bson.D{
 			{"clusterTime", "$ts"},
@@ -769,17 +798,21 @@ func (csr *ChangeStreamReader) createChangeStream(
 				Then: agg.Map{
 					Input: "$o.applyOps",
 					As:    "opEntry",
-					In: bson.D{
-						{"ns", "$$opEntry.ns"},
-						{"_docID", agg.Cond{
-							If:   agg.In("$$opEntry.op", "i", "d"),
-							Then: "$$opEntry.o._id",
-							Else: agg.Cond{
-								If:   agg.Eq("$$opEntry.op", "u"),
-								Then: "$$opEntry.o2._id",
-								Else: "$$REMOVE",
-							},
-						}},
+					In: agg.Cond{
+						If: makeOplogSingleOpFilterExpr("$$opEntry", []string{"d", "i", "u"}),
+						Then: bson.D{
+							{"ns", "$$opEntry.ns"},
+							{"_docID", agg.Cond{
+								If:   agg.In("$$opEntry.op", "i", "d"),
+								Then: "$$opEntry.o._id",
+								Else: agg.Cond{
+									If:   agg.Eq("$$opEntry.op", "u"),
+									Then: "$$opEntry.o2._id",
+									Else: "$$REMOVE",
+								},
+							}},
+						},
+						Else: "$$REMOVE",
 					},
 				},
 			}},
