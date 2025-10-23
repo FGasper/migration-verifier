@@ -3,6 +3,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/10gen/migration-verifier/internal/keystring"
@@ -16,7 +17,6 @@ import (
 	"github.com/10gen/migration-verifier/msync"
 	"github.com/10gen/migration-verifier/option"
 	mapset "github.com/deckarep/golang-set/v2"
-	clone "github.com/huandu/go-clone/generic"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/samber/lo"
@@ -369,60 +369,109 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	csCursor *cursor.Cursor,
 ) error {
 	rawEvents := csCursor.GetCurrentBatch()
-	changeEvents := make([]ParsedEvent, len(rawEvents))
+	changeEvents := make([]ParsedEvent, 0, len(rawEvents))
 
 	latestEvent := option.None[ParsedEvent]()
+
+	type op struct {
+	}
 
 	var batchTotalBytes int
 	for i, rawEvent := range rawEvents {
 		batchTotalBytes += len(rawEvent)
 
-		if err := bson.Unmarshal(rawEvent, &changeEvents[i]); err != nil {
-			return errors.Wrapf(err, "failed to decode change event to %T", changeEvents[i])
-		}
-
-		// This only logs in tests.
-		csr.logger.Trace().
-			Stringer("changeStream", csr).
-			Any("event", changeEvents[i]).
-			Int("eventsPreviouslyReadInBatch", i).
-			Int("batchEvents", len(changeEvents)).
-			Int("batchBytes", batchTotalBytes).
-			Msg("Received a change event.")
-
-		opType := changeEvents[i].OpType
-		if !supportedEventOpTypes.Contains(opType) {
-
-			// We expect certain DDL events on the destination as part of
-			// a migration. For example, mongosync enables indexes’ uniqueness
-			// constraints and sets capped collection sizes, and sometimes
-			// indexes are created after initial sync.
-
-			if csr.onDDLEvent == onDDLEventAllow {
-				csr.logger.Info().
-					Stringer("changeStream", csr).
-					Stringer("event", rawEvent).
-					Msg("Ignoring event with unrecognized type on destination. (It’s assumedly internal to the migration.)")
-
-				// Discard this event, then keep reading.
-				changeEvents = changeEvents[:len(changeEvents)-1]
-
-				continue
-			} else {
-				return UnknownEventError{Event: clone.Clone(rawEvent)}
+		var curOp = struct {
+			ClusterTime primitive.Timestamp
+			Ns          string
+			DocID       bson.RawValue `bson:"_docID,omitempty"`
+			Ops         []struct {
+				Ns    string
+				DocID bson.RawValue `bson:"_docID,omitempty"`
 			}
+		}{}
+
+		if err := bson.Unmarshal(rawEvent, &curOp); err != nil {
+			return errors.Wrap(err, "failed to decode change event")
 		}
 
-		// This shouldn’t happen, but just in case:
-		if changeEvents[i].Ns == nil {
-			return errors.Errorf("Change event lacks a namespace: %+v", changeEvents[i])
+		if len(curOp.Ops) > 0 {
+			changeEvents = slices.Grow(changeEvents, len(curOp.Ops))
+
+			for _, subOp := range curOp.Ops {
+				if subOp.DocID.IsZero() {
+					continue
+				}
+
+				db, coll, _ := strings.Cut(subOp.Ns, ".")
+
+				newEvent := ParsedEvent{
+					OpType:      "insert",
+					Ns:          &Namespace{db, coll},
+					DocID:       subOp.DocID,
+					ClusterTime: &curOp.ClusterTime,
+					FullDocLen:  option.Some(types.ByteCount(1000)),
+				}
+
+				changeEvents = append(changeEvents, newEvent)
+			}
+		} else {
+			db, coll, _ := strings.Cut(curOp.Ns, ".")
+
+			newEvent := ParsedEvent{
+				Ns:          &Namespace{db, coll},
+				DocID:       curOp.DocID,
+				ClusterTime: &curOp.ClusterTime,
+				FullDocLen:  option.Some(types.ByteCount(1000)),
+			}
+
+			changeEvents = append(changeEvents, newEvent)
 		}
 
-		if changeEvents[i].ClusterTime != nil &&
-			(csr.lastChangeEventTime == nil ||
-				csr.lastChangeEventTime.Before(*changeEvents[i].ClusterTime)) {
+		/*
+					// This only logs in tests.
+					csr.logger.Trace().
+						Stringer("changeStream", csr).
+						Any("event", changeEvents[i]).
+						Int("eventsPreviouslyReadInBatch", i).
+						Int("batchEvents", len(changeEvents)).
+						Int("batchBytes", batchTotalBytes).
+						Msg("Received a change event.")
 
-			csr.lastChangeEventTime = changeEvents[i].ClusterTime
+
+				opType := changeEvents[i].OpType
+				if !supportedEventOpTypes.Contains(opType) {
+
+					// We expect certain DDL events on the destination as part of
+					// a migration. For example, mongosync enables indexes’ uniqueness
+					// constraints and sets capped collection sizes, and sometimes
+					// indexes are created after initial sync.
+
+					if csr.onDDLEvent == onDDLEventAllow {
+						csr.logger.Info().
+							Stringer("changeStream", csr).
+							Stringer("event", rawEvent).
+							Msg("Ignoring event with unrecognized type on destination. (It’s assumedly internal to the migration.)")
+
+						// Discard this event, then keep reading.
+						changeEvents = changeEvents[:len(changeEvents)-1]
+
+						continue
+					} else {
+						return UnknownEventError{Event: clone.Clone(rawEvent)}
+					}
+				}
+
+
+			// This shouldn’t happen, but just in case:
+			if changeEvents[i].Ns == nil {
+				return errors.Errorf("Change event lacks a namespace: %+v", changeEvents[i])
+			}
+		*/
+
+		if csr.lastChangeEventTime == nil ||
+			csr.lastChangeEventTime.Before(*changeEvents[i].ClusterTime) {
+
+			csr.lastChangeEventTime = &curOp.ClusterTime
 			latestEvent = option.Some(changeEvents[i])
 		}
 	}
@@ -432,26 +481,33 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		return errors.Wrapf(err, "extracting cluster time from server response")
 	}
 
-	resumeToken, err := cursor.GetResumeToken(csCursor)
-	if err != nil {
-		return errors.Wrapf(err, "extracting resume token")
-	}
+	/*
+		resumeToken, err := cursor.GetResumeToken(csCursor)
+		if err != nil {
+			return errors.Wrapf(err, "extracting resume token")
+		}
 
-	tokenTs, err := extractTimestampFromResumeToken(resumeToken)
-	if err == nil {
-		lagSecs := int64(clusterTS.T) - int64(tokenTs.T)
-		csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
-	} else {
-		csr.logger.Warn().
-			Err(err).
-			Msgf("Failed to extract timestamp from %s's resume token to compute change stream lag.", csr)
-	}
+
+			tokenTs, err := extractTimestampFromResumeToken(resumeToken)
+			if err == nil {
+				lagSecs := int64(clusterTS.T) - int64(tokenTs.T)
+				csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
+			} else {
+				csr.logger.Warn().
+					Err(err).
+					Msgf("Failed to extract timestamp from %s's resume token to compute change stream lag.", csr)
+			}
+	*/
 
 	if len(rawEvents) == 0 {
 		ri.NoteSuccess("received an empty change stream response")
 
 		return nil
 	}
+
+	lastTs := lo.Must(lo.Last(changeEvents)).ClusterTime
+	lagSecs := int64(clusterTS.T) - int64(lastTs.T)
+	csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
 
 	if event, has := latestEvent.Get(); has {
 		csr.logger.Trace().
