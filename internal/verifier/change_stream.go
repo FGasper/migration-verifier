@@ -468,11 +468,13 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			}
 		*/
 
-		if csr.lastChangeEventTime == nil ||
-			csr.lastChangeEventTime.Before(*changeEvents[i].ClusterTime) {
+		if lastEvent, has := lo.Last(changeEvents); has {
+			if csr.lastChangeEventTime == nil ||
+				csr.lastChangeEventTime.Before(*lastEvent.ClusterTime) {
 
-			csr.lastChangeEventTime = &curOp.ClusterTime
-			latestEvent = option.Some(changeEvents[i])
+				csr.lastChangeEventTime = &curOp.ClusterTime
+				latestEvent = option.Some(lastEvent)
+			}
 		}
 	}
 
