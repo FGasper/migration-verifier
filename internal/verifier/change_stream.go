@@ -861,13 +861,18 @@ func (csr *ChangeStreamReader) createChangeStream(
 			)
 		}
 
-		startTs, err = extractTimestampFromResumeToken(resumeToken)
-		if err != nil {
-			return nil, nil, primitive.Timestamp{}, errors.Wrap(
-				err,
-				"extracting timestamp from change stream’s resume token",
-			)
-		}
+		tsRV := lo.Must(resumeToken.LookupErr("ts"))
+		startTs = lo.Must(mbson.CastRawValue[primitive.Timestamp](tsRV))
+
+		/*
+			startTs, err = extractTimestampFromResumeToken(resumeToken)
+			if err != nil {
+				return nil, nil, primitive.Timestamp{}, errors.Wrap(
+					err,
+					"extracting timestamp from change stream’s resume token",
+				)
+			}
+		*/
 	}
 
 	return myCursor, sess, startTs, nil
