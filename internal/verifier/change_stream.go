@@ -376,7 +376,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	}
 
 	var batchTotalBytes int
-	for i, rawEvent := range rawEvents {
+	for _, rawEvent := range rawEvents {
 		batchTotalBytes += len(rawEvent)
 
 		var curOp = struct {
