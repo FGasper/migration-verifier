@@ -418,6 +418,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			db, coll, _ := strings.Cut(curOp.Ns, ".")
 
 			newEvent := ParsedEvent{
+				OpType:      "insert",
 				Ns:          &Namespace{db, coll},
 				DocID:       curOp.DocID,
 				ClusterTime: &curOp.ClusterTime,
