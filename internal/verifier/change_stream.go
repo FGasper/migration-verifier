@@ -488,7 +488,10 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 	ctx context.Context,
 	ri *retry.FuncInfo,
 	csCursor *cursor.Cursor,
+	sess mongo.Session,
 ) error {
+	sessCtx := mongo.NewSessionContext(ctx, sess)
+
 	var lastPersistedTime time.Time
 
 	persistResumeTokenIfNeeded := func() error {
@@ -545,7 +548,7 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 					return err
 				}
 
-				if err := csCursor.GetNext(ctx); err != nil {
+				if err := csCursor.GetNext(sessCtx); err != nil {
 					return errors.Wrap(err, "reading change stream")
 				}
 
@@ -616,7 +619,7 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 
 func (csr *ChangeStreamReader) createChangeStream(
 	ctx context.Context,
-) (*cursor.Cursor, primitive.Timestamp, error) {
+) (*cursor.Cursor, mongo.Session, primitive.Timestamp, error) {
 
 	changeStreamStage := bson.D{
 		{"allChangesForCluster", true},
@@ -634,7 +637,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 	savedResumeToken, err := csr.loadChangeStreamResumeToken(ctx)
 	if err != nil {
-		return nil, primitive.Timestamp{}, errors.Wrap(err, "loading persisted change stream resume token")
+		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "loading persisted change stream resume token")
 	}
 
 	csStartLogEvent := csr.logger.Info()
@@ -678,7 +681,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 	sess, err := csr.watcherClient.StartSession()
 	if err != nil {
-		return nil, primitive.Timestamp{}, errors.Wrap(err, "failed to start session")
+		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to start session")
 	}
 	sctx := mongo.NewSessionContext(ctx, sess)
 
@@ -691,7 +694,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 	myCursor, err := cursor.New(adminDB, result)
 	if err != nil {
-		return nil, primitive.Timestamp{}, errors.Wrap(err, "opening change stream")
+		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "opening change stream")
 	}
 
 	var startTs primitive.Timestamp
@@ -699,14 +702,14 @@ func (csr *ChangeStreamReader) createChangeStream(
 	if len(myCursor.GetCurrentBatch()) > 0 {
 		clusterTimeRV, err := myCursor.GetCurrentBatch()[0].LookupErr("clusterTime")
 		if err != nil {
-			return nil, primitive.Timestamp{}, errors.Wrap(
+			return nil, nil, primitive.Timestamp{}, errors.Wrap(
 				err,
 				"fetching first change event’s cluster time",
 			)
 		}
 
 		if err := clusterTimeRV.Unmarshal(&startTs); err != nil {
-			return nil, primitive.Timestamp{}, errors.Wrap(
+			return nil, nil, primitive.Timestamp{}, errors.Wrap(
 				err,
 				"parsing first change event’s cluster time",
 			)
@@ -714,7 +717,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 	} else {
 		resumeToken, err := cursor.GetResumeToken(myCursor)
 		if err != nil {
-			return nil, primitive.Timestamp{}, errors.Wrap(
+			return nil, nil, primitive.Timestamp{}, errors.Wrap(
 				err,
 				"extracting change stream’s resume token",
 			)
@@ -722,14 +725,14 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 		startTs, err = extractTimestampFromResumeToken(resumeToken)
 		if err != nil {
-			return nil, primitive.Timestamp{}, errors.Wrap(
+			return nil, nil, primitive.Timestamp{}, errors.Wrap(
 				err,
 				"extracting timestamp from change stream’s resume token",
 			)
 		}
 	}
 
-	return myCursor, startTs, nil
+	return myCursor, sess, startTs, nil
 }
 
 // StartChangeStream starts the change stream.
@@ -757,7 +760,7 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 
 		err := retryer.WithCallback(
 			func(ctx context.Context, ri *retry.FuncInfo) error {
-				changeStreamCursor, startTs, err := csr.createChangeStream(ctx)
+				changeStreamCursor, sess, startTs, err := csr.createChangeStream(ctx)
 				if err != nil {
 					logEvent := csr.logger.Debug().
 						Err(err).
@@ -789,7 +792,7 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 					logEvent.Msg("Retried change stream open succeeded.")
 				}
 
-				return csr.iterateChangeStream(ctx, ri, changeStreamCursor)
+				return csr.iterateChangeStream(ctx, ri, changeStreamCursor, sess)
 			},
 			"running %s", csr,
 		).Run(ctx, csr.logger)
