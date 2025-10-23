@@ -121,7 +121,7 @@ func (c *Cursor) GetNext(ctx context.Context, extraPieces ...bson.E) error {
 	c.curBatch = lo.Must(extractBatch(raw, "nextBatch"))
 	c.rawResp = raw
 	//c.cursorExtra = baseResp.Cursor.Extra
-	c.id = lo.Must(raw.LookupErr("cursor", "_id")).AsInt64() //baseResp.Cursor.ID
+	c.id = lo.Must(raw.LookupErr("cursor", "id")).AsInt64() //baseResp.Cursor.ID
 
 	return nil
 }
