@@ -372,9 +372,6 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 	latestEvent := option.None[ParsedEvent]()
 
-	type op struct {
-	}
-
 	var batchTotalBytes int
 	for _, rawEvent := range rawEvents {
 		batchTotalBytes += len(rawEvent)
@@ -413,6 +410,8 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 				changeEvents = append(changeEvents, newEvent)
 			}
+		} else if curOp.DocID.IsZero() {
+			// TODO: Factor into latest-timestamp determination.
 		} else {
 			db, coll, _ := strings.Cut(curOp.Ns, ".")
 
@@ -501,7 +500,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			}
 	*/
 
-	if len(rawEvents) == 0 {
+	if len(changeEvents) == 0 {
 		ri.NoteSuccess("received an empty change stream response")
 
 		return nil
