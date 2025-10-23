@@ -685,7 +685,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 	}
 	sctx := mongo.NewSessionContext(ctx, sess)
 
-	adminDB := csr.watcherClient.Database("admin")
+	adminDB := sess.Client().Database("admin")
 
 	result := adminDB.RunCommand(
 		sctx,
