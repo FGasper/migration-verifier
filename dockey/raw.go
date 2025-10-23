@@ -19,7 +19,7 @@ func ExtractTrueDocKeyFromDoc(
 	fieldNames []string,
 	doc bson.Raw,
 ) (bson.Raw, error) {
-	assertFieldNameUniqueness(fieldNames)
+	//assertFieldNameUniqueness(fieldNames)
 
 	/*
 		type docElement struct {
