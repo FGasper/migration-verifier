@@ -10,6 +10,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mmongo/cursor"
 	"github.com/10gen/migration-verifier/msync"
 	"github.com/10gen/migration-verifier/option"
 	mapset "github.com/deckarep/golang-set/v2"
@@ -362,50 +363,31 @@ func (csr *ChangeStreamReader) hasBsonSize() bool {
 func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	ctx context.Context,
 	ri *retry.FuncInfo,
-	cs *mongo.ChangeStream,
-	sess mongo.Session,
+	csCursor *cursor.Cursor,
 ) error {
-	eventsRead := 0
-	var changeEvents []ParsedEvent
+	rawEvents := csCursor.GetCurrentBatch()
+	changeEvents := make([]ParsedEvent, len(rawEvents))
 
 	latestEvent := option.None[ParsedEvent]()
 
 	var batchTotalBytes int
-	for hasEventInBatch := true; hasEventInBatch; hasEventInBatch = cs.RemainingBatchLength() > 0 {
-		gotEvent := cs.TryNext(ctx)
+	for i, rawEvent := range rawEvents {
+		batchTotalBytes += len(rawEvent)
 
-		if cs.Err() != nil {
-			return errors.Wrap(cs.Err(), "change stream iteration failed")
-		}
-
-		if !gotEvent {
-			break
-		}
-
-		if changeEvents == nil {
-			batchSize := cs.RemainingBatchLength() + 1
-
-			ri.NoteSuccess("received a batch of %d change event(s)", batchSize)
-
-			changeEvents = make([]ParsedEvent, batchSize)
-		}
-
-		batchTotalBytes += len(cs.Current)
-
-		if err := cs.Decode(&changeEvents[eventsRead]); err != nil {
-			return errors.Wrapf(err, "failed to decode change event to %T", changeEvents[eventsRead])
+		if err := bson.Unmarshal(rawEvent, &changeEvents[i]); err != nil {
+			return errors.Wrapf(err, "failed to decode change event to %T", changeEvents[i])
 		}
 
 		// This only logs in tests.
 		csr.logger.Trace().
 			Stringer("changeStream", csr).
-			Any("event", changeEvents[eventsRead]).
-			Int("eventsPreviouslyReadInBatch", eventsRead).
+			Any("event", changeEvents[i]).
+			Int("eventsPreviouslyReadInBatch", i).
 			Int("batchEvents", len(changeEvents)).
 			Int("batchBytes", batchTotalBytes).
 			Msg("Received a change event.")
 
-		opType := changeEvents[eventsRead].OpType
+		opType := changeEvents[i].OpType
 		if !supportedEventOpTypes.Contains(opType) {
 
 			// We expect certain DDL events on the destination as part of
@@ -416,7 +398,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			if csr.onDDLEvent == onDDLEventAllow {
 				csr.logger.Info().
 					Stringer("changeStream", csr).
-					Stringer("event", cs.Current).
+					Stringer("event", rawEvent).
 					Msg("Ignoring event with unrecognized type on destination. (It’s assumedly internal to the migration.)")
 
 				// Discard this event, then keep reading.
@@ -424,30 +406,37 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 				continue
 			} else {
-				return UnknownEventError{Event: clone.Clone(cs.Current)}
+				return UnknownEventError{Event: clone.Clone(rawEvent)}
 			}
 		}
 
 		// This shouldn’t happen, but just in case:
-		if changeEvents[eventsRead].Ns == nil {
-			return errors.Errorf("Change event lacks a namespace: %+v", changeEvents[eventsRead])
+		if changeEvents[i].Ns == nil {
+			return errors.Errorf("Change event lacks a namespace: %+v", changeEvents[i])
 		}
 
-		if changeEvents[eventsRead].ClusterTime != nil &&
+		if changeEvents[i].ClusterTime != nil &&
 			(csr.lastChangeEventTime == nil ||
-				csr.lastChangeEventTime.Before(*changeEvents[eventsRead].ClusterTime)) {
+				csr.lastChangeEventTime.Before(*changeEvents[i].ClusterTime)) {
 
-			csr.lastChangeEventTime = changeEvents[eventsRead].ClusterTime
-			latestEvent = option.Some(changeEvents[eventsRead])
+			csr.lastChangeEventTime = changeEvents[i].ClusterTime
+			latestEvent = option.Some(changeEvents[i])
 		}
-
-		eventsRead++
 	}
 
-	var tokenTs primitive.Timestamp
-	tokenTs, err := extractTimestampFromResumeToken(cs.ResumeToken())
+	clusterTS, err := csCursor.GetClusterTime()
+	if err != nil {
+		return errors.Wrapf(err, "extracting cluster time from server response")
+	}
+
+	resumeToken, err := cursor.GetResumeToken(csCursor)
+	if err != nil {
+		return errors.Wrapf(err, "extracting resume token")
+	}
+
+	tokenTs, err := extractTimestampFromResumeToken(resumeToken)
 	if err == nil {
-		lagSecs := int64(sess.OperationTime().T) - int64(tokenTs.T)
+		lagSecs := int64(clusterTS.T) - int64(tokenTs.T)
 		csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
 	} else {
 		csr.logger.Warn().
@@ -455,7 +444,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 			Msgf("Failed to extract timestamp from %s's resume token to compute change stream lag.", csr)
 	}
 
-	if eventsRead == 0 {
+	if len(rawEvents) == 0 {
 		ri.NoteSuccess("received an empty change stream response")
 
 		return nil
@@ -476,10 +465,8 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	case <-csr.handlerError.Ready():
 		return csr.wrapHandlerErrorForReader()
 	case csr.changeEventBatchChan <- changeEventBatch{
-		events: changeEvents,
-
-		// NB: We know by now that OperationTime is non-nil.
-		clusterTime: *sess.OperationTime(),
+		events:      changeEvents,
+		clusterTime: clusterTS,
 	}:
 	}
 
@@ -498,8 +485,7 @@ func (csr *ChangeStreamReader) wrapHandlerErrorForReader() error {
 func (csr *ChangeStreamReader) iterateChangeStream(
 	ctx context.Context,
 	ri *retry.FuncInfo,
-	cs *mongo.ChangeStream,
-	sess mongo.Session,
+	csCursor *cursor.Cursor,
 ) error {
 	var lastPersistedTime time.Time
 
@@ -508,7 +494,7 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 			return nil
 		}
 
-		err := csr.persistChangeStreamResumeToken(ctx, cs)
+		err := csr.persistChangeStreamResumeToken(ctx, csCursor)
 		if err == nil {
 			lastPersistedTime = time.Now()
 		}
@@ -552,8 +538,18 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 			// Read change events until the stream reaches the writesOffTs.
 			// (i.e., the `getMore` call returns empty)
 			for {
+				err = csr.readAndHandleOneChangeEventBatch(ctx, ri, csCursor)
+				if err != nil {
+					return err
+				}
+
+				rt, err := cursor.GetResumeToken(csCursor)
+				if err != nil {
+					return errors.Wrap(err, "extracting resume token")
+				}
+
 				var curTs primitive.Timestamp
-				curTs, err = extractTimestampFromResumeToken(cs.ResumeToken())
+				curTs, err = extractTimestampFromResumeToken(rt)
 				if err != nil {
 					return errors.Wrap(err, "failed to extract timestamp from change stream's resume token")
 				}
@@ -568,16 +564,10 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 
 					break
 				}
-
-				err = csr.readAndHandleOneChangeEventBatch(ctx, ri, cs, sess)
-
-				if err != nil {
-					return err
-				}
 			}
 
 		default:
-			err = csr.readAndHandleOneChangeEventBatch(ctx, ri, cs, sess)
+			err = csr.readAndHandleOneChangeEventBatch(ctx, ri, csCursor)
 
 			if err == nil {
 				err = persistResumeTokenIfNeeded()
@@ -616,23 +606,25 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 
 func (csr *ChangeStreamReader) createChangeStream(
 	ctx context.Context,
-) (*mongo.ChangeStream, mongo.Session, primitive.Timestamp, error) {
-	pipeline := csr.GetChangeStreamFilter()
-	opts := options.ChangeStream().
-		SetMaxAwaitTime(maxChangeStreamAwaitTime)
+) (*cursor.Cursor, primitive.Timestamp, error) {
+
+	changeStreamStage := bson.D{
+		{"allChangesForCluster", true},
+	}
 
 	if csr.clusterInfo.VersionArray[0] >= 6 {
-		opts = opts.SetCustomPipeline(
-			bson.M{
-				"showSystemEvents":   true,
-				"showExpandedEvents": true,
-			},
+		changeStreamStage = append(
+			changeStreamStage,
+			bson.D{
+				{"showSystemEvents", true},
+				{"showExpandedEvents", true},
+			}...,
 		)
 	}
 
 	savedResumeToken, err := csr.loadChangeStreamResumeToken(ctx)
 	if err != nil {
-		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to load persisted change stream resume token")
+		return nil, primitive.Timestamp{}, errors.Wrap(err, "loading persisted change stream resume token")
 	}
 
 	csStartLogEvent := csr.logger.Info()
@@ -652,50 +644,77 @@ func (csr *ChangeStreamReader) createChangeStream(
 
 		logEvent.Msg("Starting change stream from persisted resume token.")
 
-		opts = opts.SetStartAfter(savedResumeToken)
+		changeStreamStage = append(
+			changeStreamStage,
+			bson.D{
+				{"startAfter", savedResumeToken},
+			}...,
+		)
 	} else {
 		csStartLogEvent.Msgf("Starting change stream from current %s cluster time.", csr.readerType)
 	}
 
-	sess, err := csr.watcherClient.StartSession()
+	aggregateCmd := bson.D{
+		{"aggregate", 1},
+		{"cursor", bson.D{
+			{"maxAwaitTimeMS", maxChangeStreamAwaitTime.Milliseconds()},
+		}},
+		{"pipeline", append(
+			mongo.Pipeline{
+				{{"$changeStream", changeStreamStage}},
+			},
+			csr.GetChangeStreamFilter()...,
+		)},
+	}
+
+	adminDB := csr.watcherClient.Database("admin")
+
+	result := adminDB.RunCommand(
+		ctx,
+		aggregateCmd,
+	)
+
+	myCursor, err := cursor.New(adminDB, result)
 	if err != nil {
-		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to start session")
-	}
-	sctx := mongo.NewSessionContext(ctx, sess)
-	changeStream, err := csr.watcherClient.Watch(sctx, pipeline, opts)
-	if err != nil {
-		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to open change stream")
+		return nil, primitive.Timestamp{}, errors.Wrap(err, "opening change stream")
 	}
 
-	err = csr.persistChangeStreamResumeToken(ctx, changeStream)
-	if err != nil {
-		return nil, nil, primitive.Timestamp{}, err
+	var startTs primitive.Timestamp
+
+	if len(myCursor.GetCurrentBatch()) > 0 {
+		clusterTimeRV, err := myCursor.GetCurrentBatch()[0].LookupErr("clusterTime")
+		if err != nil {
+			return nil, primitive.Timestamp{}, errors.Wrap(
+				err,
+				"fetching first change event’s cluster time",
+			)
+		}
+
+		if err := clusterTimeRV.Unmarshal(&startTs); err != nil {
+			return nil, primitive.Timestamp{}, errors.Wrap(
+				err,
+				"parsing first change event’s cluster time",
+			)
+		}
+	} else {
+		resumeToken, err := cursor.GetResumeToken(myCursor)
+		if err != nil {
+			return nil, primitive.Timestamp{}, errors.Wrap(
+				err,
+				"extracting change stream’s resume token",
+			)
+		}
+
+		startTs, err = extractTimestampFromResumeToken(resumeToken)
+		if err != nil {
+			return nil, primitive.Timestamp{}, errors.Wrap(
+				err,
+				"extracting timestamp from change stream’s resume token",
+			)
+		}
 	}
 
-	startTs, err := extractTimestampFromResumeToken(changeStream.ResumeToken())
-	if err != nil {
-		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to extract timestamp from change stream's resume token")
-	}
-
-	// With sharded clusters the resume token might lead the cluster time
-	// by 1 increment. In that case we need the actual cluster time;
-	// otherwise we will get errors.
-	clusterTime, err := util.GetClusterTimeFromSession(sess)
-	if err != nil {
-		return nil, nil, primitive.Timestamp{}, errors.Wrap(err, "failed to read cluster time from session")
-	}
-
-	csr.logger.Debug().
-		Any("resumeTokenTimestamp", startTs).
-		Any("clusterTime", clusterTime).
-		Stringer("changeStreamReader", csr).
-		Msg("Using earlier time as start timestamp.")
-
-	if startTs.After(clusterTime) {
-		startTs = clusterTime
-	}
-
-	return changeStream, sess, startTs, nil
+	return myCursor, startTs, nil
 }
 
 // StartChangeStream starts the change stream.
@@ -723,7 +742,7 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 
 		err := retryer.WithCallback(
 			func(ctx context.Context, ri *retry.FuncInfo) error {
-				changeStream, sess, startTs, err := csr.createChangeStream(ctx)
+				changeStreamCursor, startTs, err := csr.createChangeStream(ctx)
 				if err != nil {
 					logEvent := csr.logger.Debug().
 						Err(err).
@@ -741,8 +760,6 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 					return err
 				}
 
-				defer changeStream.Close(ctx)
-
 				logEvent := csr.logger.Debug().
 					Stringer("changeStreamReader", csr).
 					Any("startTimestamp", startTs)
@@ -757,7 +774,7 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 					logEvent.Msg("Retried change stream open succeeded.")
 				}
 
-				return csr.iterateChangeStream(ctx, ri, changeStream, sess)
+				return csr.iterateChangeStream(ctx, ri, changeStreamCursor)
 			},
 			"running %s", csr,
 		).Run(ctx, csr.logger)
@@ -825,11 +842,14 @@ func (csr *ChangeStreamReader) resumeTokenDocID() string {
 	}
 }
 
-func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Context, cs *mongo.ChangeStream) error {
-	token := cs.ResumeToken()
+func (csr *ChangeStreamReader) persistChangeStreamResumeToken(ctx context.Context, csCursor *cursor.Cursor) error {
+	token, err := cursor.GetResumeToken(csCursor)
+	if err != nil {
+		return errors.Wrapf(err, "extracting resume token")
+	}
 
 	coll := csr.getChangeStreamMetadataCollection()
-	_, err := coll.ReplaceOne(
+	_, err = coll.ReplaceOne(
 		ctx,
 		bson.D{{"_id", csr.resumeTokenDocID()}},
 		token,

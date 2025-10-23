@@ -9,9 +9,15 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/10gen/migration-verifier/mslices"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+)
+
+var (
+	clusterTimePath = mslices.Of("$clusterTime", "clusterTime")
 )
 
 // Cursor is like mongo.Cursor, but it exposes documents per batch rather than
@@ -21,8 +27,8 @@ type Cursor struct {
 	id          int64
 	ns          string
 	db          *mongo.Database
+	rawResp     bson.Raw
 	curBatch    []bson.Raw
-	baseExtra   ExtraMap
 	cursorExtra ExtraMap
 }
 
@@ -30,22 +36,41 @@ type Cursor struct {
 type ExtraMap = map[string]bson.RawValue
 
 // GetCurrentBatch returns the Cursor’s current batch of documents.
-func (c Cursor) GetCurrentBatch() []bson.Raw {
+func (c *Cursor) GetCurrentBatch() []bson.Raw {
 	return c.curBatch
 }
 
-// GetExtra returns the current response’s “extra” metadata.
-func (c Cursor) GetExtra() ExtraMap {
-	return maps.Clone(c.baseExtra)
+// GetClusterTime returns the server response’s cluster time.
+func (c *Cursor) GetClusterTime() (primitive.Timestamp, error) {
+	ctRV, err := c.rawResp.LookupErr(clusterTimePath...)
+
+	if err != nil {
+		return primitive.Timestamp{}, errors.Wrapf(
+			err,
+			"extracting %#q from server response",
+			clusterTimePath,
+		)
+	}
+
+	var ts primitive.Timestamp
+	if err := ctRV.Unmarshal(&ts); err != nil {
+		return primitive.Timestamp{}, errors.Wrapf(
+			err,
+			"parsing server response’s %#q",
+			clusterTimePath,
+		)
+	}
+
+	return ts, nil
 }
 
 // GetCursorExtra returns the current cursor batch’s “extra” metadata.
-func (c Cursor) GetCursorExtra() ExtraMap {
+func (c *Cursor) GetCursorExtra() ExtraMap {
 	return maps.Clone(c.cursorExtra)
 }
 
 // IsFinished indicates whether the present batch is the final one.
-func (c Cursor) IsFinished() bool {
+func (c *Cursor) IsFinished() bool {
 	return c.id == 0
 }
 
@@ -89,7 +114,7 @@ func (c *Cursor) GetNext(ctx context.Context, extraPieces ...bson.E) error {
 	}
 
 	c.curBatch = baseResp.Cursor.NextBatch
-	c.baseExtra = baseResp.Extra
+	c.rawResp = raw
 	c.cursorExtra = baseResp.Cursor.Extra
 	c.id = baseResp.Cursor.ID
 
@@ -106,7 +131,6 @@ type cursorResponse struct {
 
 type baseResponse struct {
 	Cursor cursorResponse
-	Extra  ExtraMap `bson:",inline"`
 }
 
 // New creates a Cursor from the response of a cursor-returning command
@@ -136,8 +160,28 @@ func New(
 		db:          db,
 		id:          baseResp.Cursor.ID,
 		ns:          baseResp.Cursor.Ns,
+		rawResp:     raw,
 		curBatch:    baseResp.Cursor.FirstBatch,
-		baseExtra:   baseResp.Extra,
 		cursorExtra: baseResp.Cursor.Extra,
 	}, nil
+}
+
+// GetPostBatchResumeToken is a convenience function that extracts the
+// post-batch resume token from the cursor.
+func GetResumeToken(c *Cursor) (bson.Raw, error) {
+	var resumeToken bson.Raw
+
+	tokenRV, hasToken := c.cursorExtra["postBatchResumeToken"]
+	if !hasToken {
+		return nil, fmt.Errorf("no resume token found")
+	}
+
+	if err := tokenRV.Unmarshal(&resumeToken); err != nil {
+		return nil, errors.Wrap(
+			err,
+			"extracting change stream’s resume token",
+		)
+	}
+
+	return resumeToken, nil
 }

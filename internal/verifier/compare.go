@@ -15,7 +15,6 @@ import (
 	"github.com/10gen/migration-verifier/mmongo/cursor"
 	"github.com/10gen/migration-verifier/option"
 	"github.com/pkg/errors"
-	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -539,24 +538,27 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 func iterateCursorToChannel(
 	sctx mongo.SessionContext,
 	state *retry.FuncInfo,
-	cursor *cursor.Cursor,
+	myCursor *cursor.Cursor,
 	writer chan<- docsWithTs,
 ) error {
 	defer close(writer)
 
 	for {
-		batch := cursor.GetCurrentBatch()
+		batch := myCursor.GetCurrentBatch()
 
-		ctT, ctI := lo.Must(cursor.GetExtra()["$clusterTime"].Document().LookupErr("clusterTime")).Timestamp()
+		ct, err := myCursor.GetClusterTime()
+		if err != nil {
+			return errors.Wrapf(err, "getting server response’s cluster time")
+		}
 
 		state.NoteSuccess("received a batch of %d documents", len(batch))
 
-		err := chanutil.WriteWithDoneCheck(
+		err = chanutil.WriteWithDoneCheck(
 			sctx,
 			writer,
 			docsWithTs{
 				docs: batch,
-				ts:   primitive.Timestamp{ctT, ctI},
+				ts:   ct,
 			},
 		)
 
@@ -564,11 +566,11 @@ func iterateCursorToChannel(
 			return errors.Wrapf(err, "sending batch of %d documents to compare thread", len(batch))
 		}
 
-		if cursor.IsFinished() {
+		if myCursor.IsFinished() {
 			return nil
 		}
 
-		if err := cursor.GetNext(sctx); err != nil {
+		if err := myCursor.GetNext(sctx); err != nil {
 			return errors.Wrap(err, "failed to iterate cursor")
 		}
 	}
