@@ -9,7 +9,6 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
-	"github.com/10gen/migration-verifier/mbson"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
@@ -32,9 +31,9 @@ const (
 // sorting by _id will guarantee that all rechecks for a given
 // namespace appear consecutively.
 type RecheckPrimaryKey struct {
-	SrcDatabaseName   string `bson:"db"`
-	SrcCollectionName string `bson:"coll"`
-	DocumentID        any    `bson:"docID"`
+	SrcDatabaseName   string        `bson:"db"`
+	SrcCollectionName string        `bson:"coll"`
+	DocumentID        bson.RawValue `bson:"docID"`
 }
 
 // RecheckDoc stores the necessary information to know which documents must be rechecked.
@@ -50,7 +49,7 @@ type RecheckDoc struct {
 // InsertFailedCompareRecheckDocs is for inserting RecheckDocs based on failures during Check.
 func (verifier *Verifier) InsertFailedCompareRecheckDocs(
 	ctx context.Context,
-	namespace string, documentIDs []any, dataSizes []int) error {
+	namespace string, documentIDs []bson.RawValue, dataSizes []int) error {
 	dbName, collName := SplitNamespace(namespace)
 
 	dbNames := make([]string, len(documentIDs))
@@ -77,7 +76,7 @@ func (verifier *Verifier) insertRecheckDocs(
 	ctx context.Context,
 	dbNames []string,
 	collNames []string,
-	documentIDs []any,
+	documentIDs []bson.RawValue,
 	dataSizes []int,
 ) error {
 	verifier.mux.RLock()
@@ -191,7 +190,7 @@ func (verifier *Verifier) insertRecheckDocs(
 
 func deduplicateRechecks(
 	dbNames, collNames []string,
-	documentIDs []any,
+	documentIDs []bson.RawValue,
 	dataSizes []int,
 ) ([]string, []string, []bson.RawValue, []int) {
 	dedupeMap := map[string]map[string]map[string]int{}
@@ -200,10 +199,8 @@ func deduplicateRechecks(
 
 	for i, dbName := range dbNames {
 		collName := collNames[i]
-		docID := documentIDs[i]
+		docIDRaw := documentIDs[i]
 		dataSize := dataSizes[i]
-
-		docIDRaw := mbson.MustConvertToRawValue(docID)
 
 		docIDStr := string(append(
 			[]byte{byte(docIDRaw.Type)},

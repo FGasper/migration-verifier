@@ -12,8 +12,10 @@ import (
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mmongo/cursor"
 	"github.com/10gen/migration-verifier/option"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -36,6 +38,11 @@ type docWithTs struct {
 	ts  primitive.Timestamp
 }
 
+type docsWithTs struct {
+	docs []bson.Raw
+	ts   primitive.Timestamp
+}
+
 func (verifier *Verifier) FetchAndCompareDocuments(
 	givenCtx context.Context,
 	workerNum int,
@@ -46,7 +53,7 @@ func (verifier *Verifier) FetchAndCompareDocuments(
 	types.ByteCount,
 	error,
 ) {
-	var srcChannel, dstChannel <-chan docWithTs
+	var srcChannel, dstChannel <-chan docsWithTs
 	var readSrcCallback, readDstCallback func(context.Context, *retry.FuncInfo) error
 
 	results := []VerificationResult{}
@@ -101,7 +108,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 	workerNum int,
 	fi *retry.FuncInfo,
 	task *VerificationTask,
-	srcChannel, dstChannel <-chan docWithTs,
+	srcChannel, dstChannel <-chan docsWithTs,
 ) (
 	[]VerificationResult,
 	types.DocumentCount,
@@ -205,7 +212,7 @@ func (verifier *Verifier) compareDocsFromChannels(
 	for !srcClosed || !dstClosed {
 		simpleTimerReset(readTimer, readTimeout)
 
-		var srcDocWithTs, dstDocWithTs docWithTs
+		var srcDocsWithTs, dstDocsWithTs docsWithTs
 
 		eg, egCtx := contextplus.ErrGroup(ctx)
 
@@ -220,16 +227,19 @@ func (verifier *Verifier) compareDocsFromChannels(
 						"failed to read from source after %s",
 						readTimeout,
 					)
-				case srcDocWithTs, alive = <-srcChannel:
+				case srcDocsWithTs, alive = <-srcChannel:
 					if !alive {
 						srcClosed = true
 						break
 					}
 
-					fi.NoteSuccess("received document from source")
+					fi.NoteSuccess("received %d-document batch from source", len(srcDocsWithTs.docs))
 
-					srcDocCount++
-					srcByteCount += types.ByteCount(len(srcDocWithTs.doc))
+					for _, doc := range srcDocsWithTs.docs {
+						srcDocCount++
+						srcByteCount += types.ByteCount(len(doc))
+					}
+
 					verifier.workerTracker.SetSrcCounts(
 						workerNum,
 						srcDocCount,
@@ -252,13 +262,13 @@ func (verifier *Verifier) compareDocsFromChannels(
 						"failed to read from destination after %s",
 						readTimeout,
 					)
-				case dstDocWithTs, alive = <-dstChannel:
+				case dstDocsWithTs, alive = <-dstChannel:
 					if !alive {
 						dstClosed = true
 						break
 					}
 
-					fi.NoteSuccess("received document from destination")
+					fi.NoteSuccess("received %d-document batch from destination", len(dstDocsWithTs.docs))
 				}
 
 				return nil
@@ -272,32 +282,48 @@ func (verifier *Verifier) compareDocsFromChannels(
 			)
 		}
 
-		if srcDocWithTs.doc != nil {
-			err := handleNewDoc(srcDocWithTs, true)
-
-			if err != nil {
-
-				return nil, 0, 0, errors.Wrapf(
-					err,
-					"comparer thread failed to handle %#q's source doc (task: %s) with ID %v",
-					namespace,
-					task.PrimaryKey,
-					srcDocWithTs.doc.Lookup("_id"),
+		if len(srcDocsWithTs.docs) > 0 {
+			for _, doc := range srcDocsWithTs.docs {
+				err := handleNewDoc(
+					docWithTs{
+						doc: doc,
+						ts:  srcDocsWithTs.ts,
+					},
+					true,
 				)
+
+				if err != nil {
+					return nil, 0, 0, errors.Wrapf(
+						err,
+						"comparer thread failed to handle %#q's source doc (task: %s) with ID %v",
+						namespace,
+						task.PrimaryKey,
+						doc.Lookup("_id"),
+					)
+				}
 			}
+
 		}
 
-		if dstDocWithTs.doc != nil {
-			err := handleNewDoc(dstDocWithTs, false)
-
-			if err != nil {
-				return nil, 0, 0, errors.Wrapf(
-					err,
-					"comparer thread failed to handle %#q's destination doc (task: %s) with ID %v",
-					namespace,
-					task.PrimaryKey,
-					dstDocWithTs.doc.Lookup("_id"),
+		if len(dstDocsWithTs.docs) > 0 {
+			for _, doc := range dstDocsWithTs.docs {
+				err := handleNewDoc(
+					docWithTs{
+						doc: doc,
+						ts:  dstDocsWithTs.ts,
+					},
+					false,
 				)
+
+				if err != nil {
+					return nil, 0, 0, errors.Wrapf(
+						err,
+						"comparer thread failed to handle %#q's destination doc (task: %s) with ID %v",
+						namespace,
+						task.PrimaryKey,
+						doc.Lookup("_id"),
+					)
+				}
 			}
 		}
 	}
@@ -428,13 +454,13 @@ func simpleTimerReset(t *time.Timer, dur time.Duration) {
 func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 	task *VerificationTask,
 ) (
-	<-chan docWithTs,
-	<-chan docWithTs,
+	<-chan docsWithTs,
+	<-chan docsWithTs,
 	func(context.Context, *retry.FuncInfo) error,
 	func(context.Context, *retry.FuncInfo) error,
 ) {
-	srcChannel := make(chan docWithTs)
-	dstChannel := make(chan docWithTs)
+	srcChannel := make(chan docsWithTs)
+	dstChannel := make(chan docsWithTs)
 
 	readSrcCallback := func(ctx context.Context, state *retry.FuncInfo) error {
 		// We open a session here so that we can read the session’s cluster
@@ -513,34 +539,39 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacks(
 func iterateCursorToChannel(
 	sctx mongo.SessionContext,
 	state *retry.FuncInfo,
-	cursor *mongo.Cursor,
-	writer chan<- docWithTs,
+	cursor *cursor.Cursor,
+	writer chan<- docsWithTs,
 ) error {
 	defer close(writer)
 
-	for cursor.Next(sctx) {
-		state.NoteSuccess("received a document")
+	for {
+		batch := cursor.GetCurrentBatch()
 
-		clusterTime, err := util.GetClusterTimeFromSession(sctx)
-		if err != nil {
-			return errors.Wrap(err, "reading cluster time from session")
-		}
+		ctT, ctI := lo.Must(cursor.GetExtra()["$clusterTime"].Document().LookupErr("clusterTime")).Timestamp()
 
-		err = chanutil.WriteWithDoneCheck(
+		state.NoteSuccess("received a batch of %d documents", len(batch))
+
+		err := chanutil.WriteWithDoneCheck(
 			sctx,
 			writer,
-			docWithTs{
-				doc: slices.Clone(cursor.Current),
-				ts:  clusterTime,
+			docsWithTs{
+				docs: batch,
+				ts:   primitive.Timestamp{ctT, ctI},
 			},
 		)
 
 		if err != nil {
-			return errors.Wrapf(err, "sending document to compare thread")
+			return errors.Wrapf(err, "sending batch of %d documents to compare thread", len(batch))
+		}
+
+		if cursor.IsFinished() {
+			return nil
+		}
+
+		if err := cursor.GetNext(sctx); err != nil {
+			return errors.Wrap(err, "failed to iterate cursor")
 		}
 	}
-
-	return errors.Wrap(cursor.Err(), "failed to iterate cursor")
 }
 
 func getMapKey(docKeyValues []bson.RawValue) string {
@@ -555,7 +586,7 @@ func getMapKey(docKeyValues []bson.RawValue) string {
 }
 
 func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collection *mongo.Collection, clusterInfo *util.ClusterInfo,
-	startAtTs *primitive.Timestamp, task *VerificationTask) (*mongo.Cursor, error) {
+	startAtTs *primitive.Timestamp, task *VerificationTask) (*cursor.Cursor, error) {
 	var findOptions bson.D
 	runCommandOptions := options.RunCmd()
 	var andPredicates bson.A
@@ -672,7 +703,9 @@ func (verifier *Verifier) getDocumentsCursor(ctx mongo.SessionContext, collectio
 		}
 	}
 
-	return collection.Database().RunCommandCursor(ctx, cmd, runCommandOptions)
+	result := collection.Database().RunCommand(ctx, cmd, runCommandOptions)
+
+	return cursor.New(collection.Database(), result)
 }
 
 func transformPipelineForToHashedIndexKey(
