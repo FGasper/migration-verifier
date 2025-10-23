@@ -218,7 +218,7 @@ OUTB:
 
 			missingOrChangedDocsTableRows++
 			missingOrChangedDocsTable.Append([]string{
-				d.ID.String(),
+				fmt.Sprintf("%s - %s", d.ID.Type, d.ID.String()),
 				task.QueryFilter.Namespace,
 				task.QueryFilter.To,
 			})
