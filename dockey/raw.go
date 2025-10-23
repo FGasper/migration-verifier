@@ -21,7 +21,18 @@ func ExtractTrueDocKeyFromDoc(
 ) (bson.Raw, error) {
 	assertFieldNameUniqueness(fieldNames)
 
-	var dk bson.D
+	/*
+		type docElement struct {
+			dataType bsontype.Type
+			name     string
+			valBytes []byte
+		}
+
+		els := make([]docElement, 0, len(fieldNames))
+	*/
+
+	docBuilder := bsoncore.NewDocumentBuilder()
+
 	for _, field := range fieldNames {
 		var val bson.RawValue
 
@@ -38,15 +49,16 @@ func ExtractTrueDocKeyFromDoc(
 			return nil, errors.Wrapf(err, "extracting doc key field %#q from doc %+v", field, doc)
 		}
 
-		dk = append(dk, bson.E{field, val})
+		docBuilder.AppendValue(
+			field,
+			bsoncore.Value{
+				Type: val.Type,
+				Data: val.Value,
+			},
+		)
 	}
 
-	docKey, err := bson.Marshal(dk)
-	if err != nil {
-		return nil, errors.Wrapf(err, "marshaling doc key %v from doc %v", dk, docKey)
-	}
-
-	return docKey, nil
+	return bson.Raw(docBuilder.Build()), nil
 }
 
 func assertFieldNameUniqueness(fieldNames []string) {
