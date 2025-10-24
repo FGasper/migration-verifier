@@ -368,7 +368,6 @@ func (csr *ChangeStreamReader) hasBsonSize() bool {
 type oplogOp struct {
 	Op          string
 	ClusterTime primitive.Timestamp
-	Type        string
 	Ns          string
 	DocID       bson.RawValue `bson:"_docID,omitempty"`
 	Ops         []struct {
@@ -378,6 +377,30 @@ type oplogOp struct {
 		DocID bson.RawValue `bson:"_docID,omitempty"`
 	}
 }
+
+/*
+func (o *oplogOp) UnmarshalBSON(raw []byte) error {
+	els, err := bson.Raw(raw).Elements()
+	if err != nil {
+		return errors.Wrap(err, "parsing doc elements")
+	}
+
+	for _, el := range els {
+		key, err := el.KeyErr()
+		if err != nil {
+			return errors.Wrap(err, "parsing field name")
+		}
+
+		switch key {
+		case "op":
+		case "clusterTime":
+		case "ns":
+		case "_docID":
+		case "ops":
+		}
+	}
+}
+*/
 
 // This function reads a single `getMore` response into a slice.
 //
