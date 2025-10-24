@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/10gen/migration-verifier/history"
 	"github.com/10gen/migration-verifier/internal/keystring"
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/retry"
@@ -100,7 +101,8 @@ type ChangeStreamReader struct {
 
 	startAtTs *primitive.Timestamp
 
-	lag *msync.TypedAtomic[option.Option[time.Duration]]
+	lag          *msync.TypedAtomic[option.Option[time.Duration]]
+	batchHistory *history.History[int]
 
 	onDDLEvent ddlEventHandling
 }
@@ -120,7 +122,9 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 		handlerError:         util.NewEventual[error](),
 		doneChan:             make(chan struct{}),
 		lag:                  msync.NewTypedAtomic(option.None[time.Duration]()),
+		batchHistory:         history.New[int](time.Minute),
 	}
+
 	verifier.dstChangeStreamReader = &ChangeStreamReader{
 		readerType:           dst,
 		logger:               verifier.logger,
@@ -135,8 +139,10 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 		handlerError:         util.NewEventual[error](),
 		doneChan:             make(chan struct{}),
 		lag:                  msync.NewTypedAtomic(option.None[time.Duration]()),
+		batchHistory:         history.New[int](time.Minute),
 		onDDLEvent:           onDDLEventAllow,
 	}
+
 }
 
 // RunChangeEventHandler handles change event batches from the reader.
@@ -520,6 +526,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	lastTs := lo.Must(lo.Last(changeEvents)).ClusterTime
 	lagSecs := int64(clusterTS.T) - int64(lastTs.T)
 	csr.lag.Store(option.Some(time.Second * time.Duration(lagSecs)))
+	csr.batchHistory.Add(len(changeEvents))
 
 	if event, has := latestEvent.Get(); has {
 		csr.logger.Trace().
@@ -989,6 +996,24 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 
 func (csr *ChangeStreamReader) GetLag() option.Option[time.Duration] {
 	return csr.lag.Load()
+}
+
+func (csr *ChangeStreamReader) GetEventsPerSecond() option.Option[float64] {
+	logs := csr.batchHistory.Get()
+	if len(logs) > 1 {
+		span := lo.LastOrEmpty(logs).At.Sub(logs[0].At)
+
+		if span > 0 {
+			totalEvents := 0
+			for _, log := range logs {
+				totalEvents += log.Datum
+			}
+
+			return option.Some(util.DivideToF64(totalEvents, span.Seconds()))
+		}
+	}
+
+	return option.None[float64]()
 }
 
 func addTimestampToLogEvent(ts primitive.Timestamp, event *zerolog.Event) *zerolog.Event {

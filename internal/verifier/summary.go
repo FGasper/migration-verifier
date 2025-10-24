@@ -13,7 +13,6 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/types"
-	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/olekukonko/tablewriter"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
@@ -535,16 +534,20 @@ func (verifier *Verifier) printChangeEventStatistics(builder *strings.Builder, n
 			totalEvents += nsTotals[ns]
 		}
 
-		elapsed := now.Sub(verifier.generationStartTime)
-
 		eventsDescr := "none"
 		if totalEvents > 0 {
 			eventsDescr = fmt.Sprintf(
-				"%s total (%s/sec), across %s namespace(s)",
+				"%s, across %s namespace(s)",
 				reportutils.FmtReal(totalEvents),
-				reportutils.FmtReal(util.DivideToF64(totalEvents, elapsed.Seconds())),
 				reportutils.FmtReal(activeNamespacesCount),
 			)
+
+			if eventsPerSec, has := cluster.csReader.GetEventsPerSecond().Get(); has {
+				eventsDescr += fmt.Sprintf(
+					" (%s/sec)",
+					reportutils.FmtReal(eventsPerSec),
+				)
+			}
 		}
 
 		fmt.Fprintf(builder, "\n%s change events this generation: %s\n", cluster.title, eventsDescr)
