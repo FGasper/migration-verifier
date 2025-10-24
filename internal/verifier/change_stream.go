@@ -359,6 +359,20 @@ func (csr *ChangeStreamReader) hasBsonSize() bool {
 	return major > 4
 }
 
+type oplogOp struct {
+	Op          string
+	ClusterTime primitive.Timestamp
+	Type        string
+	Ns          string
+	DocID       bson.RawValue `bson:"_docID,omitempty"`
+	Ops         []struct {
+		Op    string
+		Type  string
+		Ns    string
+		DocID bson.RawValue `bson:"_docID,omitempty"`
+	}
+}
+
 // This function reads a single `getMore` response into a slice.
 //
 // Note that this doesn’t care about the writesOff timestamp. Thus,
@@ -381,22 +395,19 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	for _, rawEvent := range rawEvents {
 		batchTotalBytes += len(rawEvent)
 
-		var curOp = struct {
-			Op          string
-			ClusterTime primitive.Timestamp
-			Type        string
-			Ns          string
-			DocID       bson.RawValue `bson:"_docID,omitempty"`
-			Ops         []struct {
-				Op    string
-				Type  string
-				Ns    string
-				DocID bson.RawValue `bson:"_docID,omitempty"`
-			}
-		}{}
+		var curOp = oplogOp{}
 
 		if err := bson.Unmarshal(rawEvent, &curOp); err != nil {
 			return errors.Wrap(err, "failed to decode change event")
+		}
+
+		if lastEvent, has := lo.Last(changeEvents); has {
+			if csr.lastChangeEventTime == nil ||
+				csr.lastChangeEventTime.Before(*lastEvent.ClusterTime) {
+
+				csr.lastChangeEventTime = &curOp.ClusterTime
+				latestEvent = option.Some(lastEvent)
+			}
 		}
 
 		if len(curOp.Ops) > 0 {
@@ -475,15 +486,6 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 				return errors.Errorf("Change event lacks a namespace: %+v", changeEvents[i])
 			}
 		*/
-
-		if lastEvent, has := lo.Last(changeEvents); has {
-			if csr.lastChangeEventTime == nil ||
-				csr.lastChangeEventTime.Before(*lastEvent.ClusterTime) {
-
-				csr.lastChangeEventTime = &curOp.ClusterTime
-				latestEvent = option.Some(lastEvent)
-			}
-		}
 	}
 
 	clusterTS, err := csCursor.GetClusterTime()
@@ -794,7 +796,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 			{"op", agg.Cond{
 				If: agg.And{
 					agg.Eq("$op", "u"),
-					agg.Not{agg.Eq("missing", agg.Type("$o2._id"))},
+					agg.Not{agg.Eq("missing", agg.Type("$o._id"))},
 				},
 				Then: "r",
 				Else: "$op",
@@ -822,7 +824,7 @@ func (csr *ChangeStreamReader) createChangeStream(
 							{"op", agg.Cond{
 								If: agg.And{
 									agg.Eq("$$opEntry.op", "u"),
-									agg.Not{agg.Eq("missing", agg.Type("$$opEntry.o2._id"))},
+									agg.Not{agg.Eq("missing", agg.Type("$$opEntry.o._id"))},
 								},
 								Then: "r",
 								Else: "$$opEntry.op",
