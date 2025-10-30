@@ -167,6 +167,8 @@ func (verifier *Verifier) insertRecheckDocs(
 						},
 					).Err()
 
+					return nil // XXX FIXME
+
 					// We expect duplicate-key errors from the above because:
 					//
 					// a) The same document can change multiple times per generation.
