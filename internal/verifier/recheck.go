@@ -42,6 +42,10 @@ type RecheckPrimaryKey struct {
 var _ bson.Marshaler = &RecheckPrimaryKey{}
 
 func (rk RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
+	panic("Use MarshalToBSON instead.")
+}
+
+func (rk RecheckPrimaryKey) MarshalToBSON() ([]byte, error) {
 	// This is a very “hot” path, so we want to minimize allocations.
 	variableSize := len(rk.SrcDatabaseName) + len(rk.SrcCollectionName) + len(rk.DocumentID.Value)
 
@@ -75,7 +79,11 @@ type RecheckDoc struct {
 var _ bson.Marshaler = &RecheckDoc{}
 
 func (rd RecheckDoc) MarshalBSON() ([]byte, error) {
-	keyRaw, err := bson.Marshal(rd.PrimaryKey)
+	panic("Use MarshalToBSON instead.")
+}
+
+func (rd RecheckDoc) MarshalToBSON() ([]byte, error) {
+	keyRaw, err := rd.PrimaryKey.MarshalBSON()
 	if err != nil {
 		return nil, errors.Wrapf(err, "marshaling recheck primary key")
 	}
@@ -195,7 +203,7 @@ func (verifier *Verifier) insertRecheckDocs(
 			DataSize: dataSizes[i],
 		}
 
-		recheckRaw, err := bson.Marshal(recheckDoc)
+		recheckRaw, err := recheckDoc.MarshalToBSON()
 		if err != nil {
 			return errors.Wrapf(err, "marshaling recheck for %#q", dbName+"."+collNames[i])
 		}
