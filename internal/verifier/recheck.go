@@ -11,7 +11,6 @@ import (
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/pkg/errors"
-	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -155,11 +154,18 @@ func (verifier *Verifier) insertRecheckDocs(
 			retryer := retry.New()
 			err := retryer.WithCallback(
 				func(retryCtx context.Context, _ *retry.FuncInfo) error {
-					_, err := genCollection.InsertMany(
+
+					// The driver’s InsertMany method inspects each document
+					// to ensure that it has an _id. We can avoid that extra
+					// overhead by calling RunCommand instead.
+					err := genCollection.Database().RunCommand(
 						retryCtx,
-						lo.ToAnySlice(rechecks),
-						options.InsertMany().SetOrdered(false),
-					)
+						bson.D{
+							{"insert", genCollection.Name()},
+							{"documents", rechecks},
+							{"ordered", false},
+						},
+					).Err()
 
 					// We expect duplicate-key errors from the above because:
 					//
