@@ -195,6 +195,8 @@ func (verifier *Verifier) insertRecheckDocs(
 		)
 		requestBSON = append(requestBSON, 0)
 
+		binary.LittleEndian.PutUint32(requestBSON, uint32(len(requestBSON)))
+
 		eg.Go(func() error {
 
 			retryer := retry.New()
