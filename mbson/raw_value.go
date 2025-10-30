@@ -33,24 +33,11 @@ func (ce cannotCastErr) Error() string {
 //
 // Augment bsonCastRecipient if you find a type here that’s missing.
 func CastRawValue[T bsonCastRecipient](in bson.RawValue) (T, error) {
-	switch any(*new(T)).(type) {
-	case bson.Raw:
-		if doc, isDoc := in.DocumentOK(); isDoc {
-			return any(doc).(T), nil
-		}
-	case primitive.Timestamp:
-		if t, i, ok := in.TimestampOK(); ok {
-			return any(primitive.Timestamp{t, i}).(T), nil
-		}
-	case string:
-		if str, ok := in.StringValueOK(); ok {
-			return any(str).(T), nil
-		}
-	default:
-		panic(fmt.Sprintf("Unrecognized Go type: %T (maybe augment bsonType?)", in))
-	}
+	ref := new(T)
 
-	return *new(T), cannotCastErr{in.Type, any(in)}
+	err := UnmarshalRawValue(in, ref)
+
+	return *ref, err
 }
 
 // Lookup fetches a value from a BSON document, casts it to the appropriate
@@ -94,10 +81,34 @@ func UnmarshalElementValue[T bsonCastRecipient](in bson.RawElement, recipient *T
 // UnmarshalRawValue implements bson.Unmarshal’s semantics but with additional
 // type constraints that avoid reflection.
 func UnmarshalRawValue[T bsonCastRecipient](in bson.RawValue, recipient *T) error {
-	var err error
-	*recipient, err = CastRawValue[T](in)
+	/*
+		var err error
+		*recipient, err = CastRawValue[T](in)
 
-	return err
+		return err
+	*/
+
+	var ok bool
+
+	switch any(*new(T)).(type) {
+	case bson.Raw:
+		if *any(recipient).(*bson.Raw), ok = in.DocumentOK(); ok {
+			return nil
+		}
+	case primitive.Timestamp:
+		if t, i, ok := in.TimestampOK(); ok {
+			*any(recipient).(*primitive.Timestamp) = primitive.Timestamp{t, i}
+			return nil
+		}
+	case string:
+		if *any(recipient).(*string), ok = in.StringValueOK(); ok {
+			return nil
+		}
+	default:
+		panic(fmt.Sprintf("Unrecognized Go type: %T (maybe augment bsonType?)", in))
+	}
+
+	return cannotCastErr{in.Type, any(in)}
 }
 
 // ToRawValue is a bit like bson.MarshalValue, but:
