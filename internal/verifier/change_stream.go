@@ -361,7 +361,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 		var newEvent ParsedEvent
 
-		if err := bson.Unmarshal(rawEvent, &newEvent); err != nil {
+		if err := (&newEvent).UnmarshalFromBSON(rawEvent); err != nil {
 			return errors.Wrapf(err, "parsing change event")
 		}
 
