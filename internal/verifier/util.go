@@ -71,15 +71,31 @@ func (ns *Namespace) UnmarshalBSON(in []byte) error {
 }
 
 func (ns *Namespace) UnmarshalFromBSON(in []byte) error {
-	rawDoc := bson.Raw(in)
+	for el, err := range mbson.RawElements(in) {
+		if err != nil {
+			return errors.Wrapf(err, "parsing elements")
+		}
 
-	err := mbson.LookupTo(rawDoc, &ns.DB, "db")
+		key, err := el.KeyErr()
+		if err != nil {
+			return errors.Wrapf(err, "parsing field name")
+		}
 
-	if err != nil {
-		return err
+		switch key {
+		case "db":
+			err := mbson.UnmarshalElementValue(el, &ns.DB)
+			if err != nil {
+				return err
+			}
+		case "coll":
+			err := mbson.UnmarshalElementValue(el, &ns.Coll)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	return mbson.LookupTo(rawDoc, &ns.Coll, "coll")
+	return nil
 }
 
 // NewNamespace returns a new Namespace struct with the given parameters.

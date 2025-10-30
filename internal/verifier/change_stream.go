@@ -378,7 +378,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 
 		batchTotalBytes += len(cs.Current)
 
-		err := (&changeEvents[eventsRead]).UnmarshalBSON(cs.Current)
+		err := (&changeEvents[eventsRead]).UnmarshalFromBSON(cs.Current)
 		if err != nil {
 			return errors.Wrapf(err, "failed to decode change event to %T", changeEvents[eventsRead])
 		}
