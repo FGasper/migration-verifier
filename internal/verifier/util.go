@@ -67,6 +67,10 @@ func (ns *Namespace) FullName() string {
 // avoid reflection, which can substantially impede performance in “hot”
 // code paths like this.
 func (ns *Namespace) UnmarshalBSON(in []byte) error {
+	panic("Use UnmarshalFromBSON instead.")
+}
+
+func (ns *Namespace) UnmarshalFromBSON(in []byte) error {
 	rawDoc := bson.Raw(in)
 
 	err := mbson.LookupTo(rawDoc, &ns.DB, "db")

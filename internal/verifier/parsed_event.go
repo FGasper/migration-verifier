@@ -59,7 +59,7 @@ func (pe *ParsedEvent) UnmarshalBSON(in []byte) error {
 
 			ns := &Namespace{}
 
-			err = ns.UnmarshalBSON(rvDoc)
+			err = ns.UnmarshalFromBSON(rvDoc)
 			if err != nil {
 				return errors.Wrapf(err, "unmarshaling %#q value", key)
 			}
