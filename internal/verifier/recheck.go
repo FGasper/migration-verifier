@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strconv"
 
 	"github.com/10gen/migration-verifier/contextplus"
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/mbson"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
@@ -148,7 +150,51 @@ func (verifier *Verifier) insertRecheckDocs(
 
 	genCollection := verifier.getRecheckQueueCollection(generation)
 
-	sendRechecks := func(rechecks []bson.Raw) {
+	sendRechecks := func(rechecks []bson.Raw, batchBytes int) {
+		recheckKeysSize := mbson.GetTotalKeysSize(len(rechecks))
+
+		// 4 bytes for doc length
+		// each element’s key length
+		// 2 extra bytes per element for type & key’s NUL
+		// the element values
+		// final NUL
+		rechecksBSONSize := 4 + recheckKeysSize + 2*len(rechecks) + batchBytes + 1
+
+		rechecksBSON := make(bson.Raw, 4, rechecksBSONSize)
+		binary.LittleEndian.PutUint32(rechecksBSON, uint32(rechecksBSONSize))
+		for i, recheck := range rechecks {
+			rechecksBSON = bsoncore.AppendDocumentElement(
+				rechecksBSON,
+				strconv.Itoa(i),
+				recheck,
+			)
+		}
+
+		// final NUL
+		rechecksBSON = append(rechecksBSON, 0)
+
+		if len(rechecksBSON) != rechecksBSONSize {
+			panic(fmt.Sprintf("rechecks BSON doc size (%d) != expected (%d)", len(rechecksBSON), rechecksBSONSize))
+		}
+
+		requestBSON := make(bson.Raw, 4, 50+rechecksBSONSize)
+		requestBSON = bsoncore.AppendStringElement(
+			requestBSON,
+			"insert",
+			genCollection.Name(),
+		)
+		requestBSON = bsoncore.AppendBooleanElement(
+			requestBSON,
+			"ordered",
+			false,
+		)
+		requestBSON = bsoncore.AppendArrayElement(
+			requestBSON,
+			"documents",
+			rechecksBSON,
+		)
+		requestBSON = append(requestBSON, 0)
+
 		eg.Go(func() error {
 
 			retryer := retry.New()
@@ -160,11 +206,7 @@ func (verifier *Verifier) insertRecheckDocs(
 					// overhead by calling RunCommand instead.
 					err := genCollection.Database().RunCommand(
 						retryCtx,
-						bson.D{
-							{"insert", genCollection.Name()},
-							{"documents", rechecks},
-							{"ordered", false},
-						},
+						requestBSON,
 					).Err()
 
 					return nil // XXX FIXME
@@ -223,14 +265,14 @@ func (verifier *Verifier) insertRecheckDocs(
 
 		curBatchBytes += len(recheckRaw)
 		if curBatchBytes > recheckBatchByteLimit || len(curRechecks) >= recheckBatchCountLimit {
-			sendRechecks(curRechecks)
+			sendRechecks(curRechecks, curBatchBytes)
 			curRechecks = make([]bson.Raw, 0, recheckBatchCountLimit)
 			curBatchBytes = 0
 		}
 	}
 
 	if len(curRechecks) > 0 {
-		sendRechecks(curRechecks)
+		sendRechecks(curRechecks, curBatchBytes)
 	}
 
 	if err := eg.Wait(); err != nil {

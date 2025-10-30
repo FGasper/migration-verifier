@@ -1,8 +1,10 @@
 package mbson
 
 import (
+	"encoding/binary"
 	"fmt"
 	"iter"
+	"strconv"
 
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
@@ -30,6 +32,31 @@ func RawLookup[T any](doc bson.Raw, dest *T, keys ...string) (bool, error) {
 func RawContains(doc bson.Raw, keys ...string) (bool, error) {
 	val := any(nil)
 	return RawLookup(doc, &val, keys...)
+}
+
+type arrayMarshalable interface {
+	bson.Raw
+}
+
+func MarshalArray[T arrayMarshalable](in []byte, els []T) []byte {
+	in = binary.LittleEndian.AppendUint32(in, 0)
+
+	for i, el := range els {
+		rv := ToRawValue(el)
+
+		switch any(el).(type) {
+		case bson.Raw:
+			in = bsoncore.AppendValueElement(
+				in,
+				strconv.Itoa(i),
+				bsoncore.Value{Type: rv.Type, Data: rv.Value},
+			)
+		default:
+			panic(fmt.Sprintf("Unrecognized Go type: %T (maybe add array marshal instructions?)", in))
+		}
+	}
+
+	return in
 }
 
 func RawElements(doc bson.Raw) iter.Seq2[bson.RawElement, error] {
