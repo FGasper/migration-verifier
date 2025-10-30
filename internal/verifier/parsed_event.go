@@ -31,12 +31,11 @@ var _ bson.Unmarshaler = &ParsedEvent{}
 // avoid reflection, which can substantially impede performance in “hot”
 // code paths like this.
 func (pe *ParsedEvent) UnmarshalBSON(in []byte) error {
-	els, err := bson.Raw(in).Elements()
-	if err != nil {
-		return errors.Wrapf(err, "parsing elements")
-	}
+	for el, err := range mbson.RawElements(in) {
+		if err != nil {
+			return errors.Wrapf(err, "parsing elements")
+		}
 
-	for _, el := range els {
 		key, err := el.KeyErr()
 		if err != nil {
 			return errors.Wrapf(err, "parsing field name")

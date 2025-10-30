@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/10gen/migration-verifier/contextplus"
@@ -40,15 +41,25 @@ type RecheckPrimaryKey struct {
 
 var _ bson.Marshaler = &RecheckPrimaryKey{}
 
-func (rk *RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
-	return bsoncore.NewDocumentBuilder().
-		AppendString("db", rk.SrcDatabaseName).
-		AppendString("coll", rk.SrcCollectionName).
-		AppendValue("docID", bsoncore.Value{
-			Type: rk.DocumentID.Type,
-			Data: rk.DocumentID.Value,
-		}).
-		Build(), nil
+func (rk RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
+	// This is a very “hot” path, so we want to minimize allocations.
+	variableSize := len(rk.SrcDatabaseName) + len(rk.SrcCollectionName) + len(rk.DocumentID.Value)
+
+	// This document’s nonvariable parts comprise 32 bytes.
+	doc := make(bson.Raw, 4, 32+variableSize)
+
+	doc = bsoncore.AppendStringElement(doc, "db", rk.SrcDatabaseName)
+	doc = bsoncore.AppendStringElement(doc, "coll", rk.SrcCollectionName)
+	doc = bsoncore.AppendValueElement(doc, "docID", bsoncore.Value{
+		Type: rk.DocumentID.Type,
+		Data: rk.DocumentID.Value,
+	})
+
+	doc = append(doc, 0)
+
+	binary.LittleEndian.PutUint32(doc, uint32(len(doc)))
+
+	return doc, nil
 }
 
 // RecheckDoc stores the necessary information to know which documents must be rechecked.
@@ -63,11 +74,22 @@ type RecheckDoc struct {
 
 var _ bson.Marshaler = &RecheckDoc{}
 
-func (rd *RecheckDoc) MarshalBSON() ([]byte, error) {
-	return bsoncore.NewDocumentBuilder().
-		AppendDocument("_id", lo.Must(bson.Marshal(rd.PrimaryKey))).
-		AppendInt64("dataSize", int64(rd.DataSize)).
-		Build(), nil
+func (rd RecheckDoc) MarshalBSON() ([]byte, error) {
+	keyRaw, err := bson.Marshal(rd.PrimaryKey)
+	if err != nil {
+		return nil, errors.Wrapf(err, "marshaling recheck primary key")
+	}
+
+	// This document’s nonvariable parts comprise 24 bytes.
+	doc := make(bson.Raw, 4, 24+len(keyRaw))
+	doc = bsoncore.AppendDocumentElement(doc, "_id", keyRaw)
+	doc = bsoncore.AppendInt32Element(doc, "dataSize", int32(rd.DataSize))
+
+	doc = append(doc, 0)
+
+	binary.LittleEndian.PutUint32(doc, uint32(len(doc)))
+
+	return doc, nil
 }
 
 // InsertFailedCompareRecheckDocs is for inserting RecheckDocs based on failures during Check.

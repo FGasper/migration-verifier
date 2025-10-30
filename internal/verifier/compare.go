@@ -399,11 +399,12 @@ func getDocKeyValues(
 		}
 	}
 
-	var values []bson.RawValue
 	els, err := docKey.Elements()
 	if err != nil {
 		return nil, errors.Wrapf(err, "parsing doc key (%+v) of doc %+v", docKey, doc)
 	}
+
+	values := make([]bson.RawValue, 0, len(els))
 
 	for _, el := range els {
 		val, err := el.ValueErr()
