@@ -83,7 +83,7 @@ func (rd RecheckDoc) MarshalBSON() ([]byte, error) {
 }
 
 func (rd RecheckDoc) MarshalToBSON() ([]byte, error) {
-	keyRaw, err := rd.PrimaryKey.MarshalBSON()
+	keyRaw, err := rd.PrimaryKey.MarshalToBSON()
 	if err != nil {
 		return nil, errors.Wrapf(err, "marshaling recheck primary key")
 	}
