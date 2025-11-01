@@ -11,14 +11,13 @@ import (
 
 	"github.com/10gen/migration-verifier/contextplus"
 	"github.com/10gen/migration-verifier/internal/logger"
-	"github.com/10gen/migration-verifier/internal/metrics"
 	"github.com/10gen/migration-verifier/internal/verifier/webserver"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.mongodb.org/mongo-driver/v2/bson"
-	"go.opentelemetry.io/otel/exporters/prometheus"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -147,10 +146,11 @@ func (server *WebServer) setupRouter() *gin.Engine {
 		}
 	}
 
-	exporter, _ := prometheus.New()
-	prometheus.MustRegister(exporter)
-	metrics.Init(exporter)
-	router.GET("/metrics", gin.WrapH(exporter.Handler()))
+	// NewWithConfig is the recommended way to initialize the middleware
+	p := ginprometheus.NewWithConfig(ginprometheus.Config{
+		Subsystem: "gin",
+	})
+	p.Use(router)
 
 	router.HandleMethodNotAllowed = true
 	return router
