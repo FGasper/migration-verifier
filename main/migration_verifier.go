@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/10gen/migration-verifier/internal/metrics"
 	"github.com/10gen/migration-verifier/internal/verifier"
 	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/10gen/migration-verifier/mslices"
@@ -20,6 +21,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/urfave/cli"
 	"github.com/urfave/cli/altsrc"
+	"go.opentelemetry.io/otel/exporters/prometheus"
 )
 
 const (
@@ -66,6 +68,9 @@ var logLevelStrs = lo.Map(
 )
 
 func main() {
+	exporter, _ := prometheus.New()
+	metrics.Init(exporter)
+
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)

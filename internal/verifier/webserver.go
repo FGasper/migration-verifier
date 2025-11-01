@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	ginprometheus "github.com/zsais/go-gin-prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"golang.org/x/sync/semaphore"
 )
@@ -146,11 +146,7 @@ func (server *WebServer) setupRouter() *gin.Engine {
 		}
 	}
 
-	// NewWithConfig is the recommended way to initialize the middleware
-	p := ginprometheus.NewWithConfig(ginprometheus.Config{
-		Subsystem: "gin",
-	})
-	p.Use(router)
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	router.HandleMethodNotAllowed = true
 	return router

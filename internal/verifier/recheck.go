@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/10gen/migration-verifier/contextplus"
+	"github.com/10gen/migration-verifier/internal/metrics"
 	"github.com/10gen/migration-verifier/internal/reportutils"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/types"
@@ -22,6 +23,11 @@ const (
 	recheckBatchCountLimit = 1000
 
 	recheckQueueCollectionNameBase = "recheckQueue"
+)
+
+var (
+	recheckBatchSizeRecorder    = lo.Must(metrics.Meter.Int64Histogram("recheck-batch-size"))
+	recheckWriteThreadsRecorder = lo.Must(metrics.Meter.Int64UpDownCounter("recheck-write-threads"))
 )
 
 // RecheckPrimaryKey stores the implicit type of recheck to perform
@@ -118,7 +124,11 @@ func (verifier *Verifier) insertRecheckDocs(
 
 	genCollection := verifier.getRecheckQueueCollection(generation)
 
+	insertThreads := 0
+
 	sendRechecks := func(rechecks []bson.Raw) {
+		insertThreads++
+
 		eg.Go(func() error {
 
 			retryer := retry.New()
@@ -202,6 +212,9 @@ func (verifier *Verifier) insertRecheckDocs(
 			generation,
 		)
 	}
+
+	recheckBatchSizeRecorder.Record(ctx, int64(len(documentIDs)))
+	recheckWriteThreadsRecorder.Add(ctx, int64(insertThreads))
 
 	verifier.logger.Trace().
 		Int("generation", generation).
