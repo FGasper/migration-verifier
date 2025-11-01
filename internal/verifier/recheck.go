@@ -27,7 +27,7 @@ const (
 
 var (
 	recheckBatchSizeRecorder    = lo.Must(metrics.Meter.Int64Histogram("recheck-batch-size"))
-	recheckWriteThreadsRecorder = lo.Must(metrics.Meter.Int64UpDownCounter("recheck-write-threads"))
+	recheckWriteThreadsRecorder = lo.Must(metrics.Meter.Int64Histogram("recheck-write-threads"))
 )
 
 // RecheckPrimaryKey stores the implicit type of recheck to perform
@@ -214,7 +214,7 @@ func (verifier *Verifier) insertRecheckDocs(
 	}
 
 	recheckBatchSizeRecorder.Record(ctx, int64(len(documentIDs)))
-	recheckWriteThreadsRecorder.Add(ctx, int64(insertThreads))
+	recheckWriteThreadsRecorder.Record(ctx, int64(insertThreads))
 
 	verifier.logger.Trace().
 		Int("generation", generation).

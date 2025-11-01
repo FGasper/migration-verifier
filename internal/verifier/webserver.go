@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
@@ -118,11 +119,13 @@ func (server *WebServer) RequestAndResponseLogger() gin.HandlerFunc {
 
 		c.Next()
 
-		server.logger.Info().Int("status", c.Writer.Status()).
-			Str("body", rbw.body.String()).
-			Str("traceID", traceID).
-			Str("latency", time.Since(t).String()).
-			Msg("sent response")
+		if !strings.HasPrefix(c.Request.RequestURI, "/metrics") {
+			server.logger.Info().Int("status", c.Writer.Status()).
+				Str("body", rbw.body.String()).
+				Str("traceID", traceID).
+				Str("latency", time.Since(t).String()).
+				Msg("sent response")
+		}
 	}
 }
 
