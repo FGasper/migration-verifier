@@ -190,14 +190,14 @@ github.com/pkg/errors
 # github.com/pmezard/go-difflib v1.0.0
 ## explicit
 github.com/pmezard/go-difflib/difflib
-# github.com/prometheus/client_golang v1.23.0
+# github.com/prometheus/client_golang v1.23.2
 ## explicit; go 1.23.0
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 # github.com/prometheus/client_model v0.6.2
 ## explicit; go 1.22.0
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.65.0
+# github.com/prometheus/common v0.66.1
 ## explicit; go 1.23.0
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/model
@@ -373,10 +373,13 @@ go.opentelemetry.io/otel/trace
 go.opentelemetry.io/otel/trace/embedded
 go.opentelemetry.io/otel/trace/internal/telemetry
 go.opentelemetry.io/otel/trace/noop
+# go.yaml.in/yaml/v2 v2.4.2
+## explicit; go 1.15
+go.yaml.in/yaml/v2
 # golang.org/x/arch v0.16.0
 ## explicit; go 1.23.0
 golang.org/x/arch/x86/x86asm
-# golang.org/x/crypto v0.38.0
+# golang.org/x/crypto v0.41.0
 ## explicit; go 1.23.0
 golang.org/x/crypto/ocsp
 golang.org/x/crypto/pbkdf2
@@ -387,7 +390,7 @@ golang.org/x/crypto/sha3
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
 golang.org/x/exp/slices
-# golang.org/x/net v0.40.0
+# golang.org/x/net v0.43.0
 ## explicit; go 1.23.0
 golang.org/x/net/html
 golang.org/x/net/html/atom
@@ -397,7 +400,7 @@ golang.org/x/net/http2/h2c
 golang.org/x/net/http2/hpack
 golang.org/x/net/idna
 golang.org/x/net/internal/httpcommon
-# golang.org/x/sync v0.15.0
+# golang.org/x/sync v0.16.0
 ## explicit; go 1.23.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
@@ -408,7 +411,7 @@ golang.org/x/sys/cpu
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-# golang.org/x/text v0.25.0
+# golang.org/x/text v0.28.0
 ## explicit; go 1.23.0
 golang.org/x/text/cases
 golang.org/x/text/internal
