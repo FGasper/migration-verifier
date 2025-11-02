@@ -233,7 +233,7 @@ func (verifier *Verifier) insertRecheckDocs(
 			return errors.Wrapf(err, "marshaling recheck for %#q", dbName+"."+collNames[i])
 		}
 
-		lo.Must(bson.Raw(recheckRaw).LookupErr("_id")).StringValue()
+		lo.Must(bson.Raw(recheckRaw).LookupErr("_id")).Binary()
 
 		curRechecks = append(
 			curRechecks,
