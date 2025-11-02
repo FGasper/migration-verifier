@@ -88,7 +88,7 @@ func (rd RecheckDoc) MarshalBSON() ([]byte, error) {
 	)
 
 	return bsoncore.NewDocumentBuilder().
-		AppendString("_id", id).
+		AppendBinary("_id", 0, []byte(id)).
 		AppendInt64("dataSize", int64(rd.DataSize)).
 		Build(), nil
 }
@@ -98,11 +98,11 @@ var _ bson.Unmarshaler = &RecheckDoc{}
 func (rd *RecheckDoc) UnmarshalBSON(in []byte) error {
 	inRaw := bson.Raw(in)
 
-	idStr := lo.Must(inRaw.LookupErr("_id")).StringValue()
-	pieces := strings.SplitN(idStr, "\x00", 4)
+	_, idBinary := lo.Must(inRaw.LookupErr("_id")).Binary()
+	pieces := strings.SplitN(string(idBinary), "\x00", 4)
 
 	if len(pieces[2]) != 1 {
-		panic(fmt.Sprintf("Weird _id (3rd piece should be len==1): %#q", idStr))
+		panic(fmt.Sprintf("Weird _id (3rd piece should be len==1): %#q", string(idBinary)))
 	}
 
 	rd.PrimaryKey = RecheckPrimaryKey{
