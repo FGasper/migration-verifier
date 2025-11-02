@@ -1496,28 +1496,30 @@ func (verifier *Verifier) PrintVerificationSummary(ctx context.Context, genstatu
 		reportutils.DurationToHMS(elapsedSinceGenStart),
 	)
 
-	metadataMismatches, anyCollsIncomplete, err := verifier.reportCollectionMetadataMismatches(ctx, strBuilder)
+	_, _, err := verifier.reportCollectionMetadataMismatches(ctx, strBuilder)
 	if err != nil {
 		verifier.logger.Err(err).Msgf("Failed to report collection metadata mismatches")
 		return
 	}
 
-	var hasTasks bool
-	switch genstatus {
-	case Gen0MetadataAnalysisComplete:
-		fallthrough
-	case GenerationInProgress:
-		hasTasks, err = verifier.printNamespaceStatistics(ctx, strBuilder, reportGenStartTime)
-	case GenerationComplete:
-		hasTasks, err = verifier.printEndOfGenerationStatistics(ctx, strBuilder, reportGenStartTime)
-	default:
-		panic("Bad generation status: " + genstatus)
-	}
+	/*
+		var hasTasks bool
+		switch genstatus {
+		case Gen0MetadataAnalysisComplete:
+			fallthrough
+		case GenerationInProgress:
+			hasTasks, err = verifier.printNamespaceStatistics(ctx, strBuilder, reportGenStartTime)
+		case GenerationComplete:
+			hasTasks, err = verifier.printEndOfGenerationStatistics(ctx, strBuilder, reportGenStartTime)
+		default:
+			panic("Bad generation status: " + genstatus)
+		}
 
-	if err != nil {
-		verifier.logger.Err(err).Msgf("Failed to report per-namespace statistics")
-		return
-	}
+		if err != nil {
+			verifier.logger.Err(err).Msgf("Failed to report per-namespace statistics")
+			return
+		}
+	*/
 
 	verifier.printChangeEventStatistics(strBuilder)
 
@@ -1531,40 +1533,45 @@ func (verifier *Verifier) PrintVerificationSummary(ctx context.Context, genstatu
 
 	var statusLine string
 
-	if hasTasks {
-		docMismatches, anyPartitionsIncomplete, err := verifier.reportDocumentMismatches(ctx, strBuilder)
-		if err != nil {
-			verifier.logger.Err(err).Msgf("Failed to report document mismatches")
-			return
-		}
+	/*
+		if hasTasks {
+			docMismatches, anyPartitionsIncomplete, err := verifier.reportDocumentMismatches(ctx, strBuilder)
+			if err != nil {
+				verifier.logger.Err(err).Msgf("Failed to report document mismatches")
+				return
+			}
 
-		if metadataMismatches || docMismatches {
-			verifier.printMismatchInvestigationNotes(strBuilder)
+			if metadataMismatches || docMismatches {
+				verifier.printMismatchInvestigationNotes(strBuilder)
 
-			statusLine = fmt.Sprintf(notOkSymbol + " Mismatches found.")
-		} else if anyCollsIncomplete || anyPartitionsIncomplete {
-			statusLine = fmt.Sprintf(infoSymbol + " No mismatches found yet, but verification is still in progress.")
+				statusLine = fmt.Sprintf(notOkSymbol + " Mismatches found.")
+			} else if anyCollsIncomplete || anyPartitionsIncomplete {
+				statusLine = fmt.Sprintf(infoSymbol + " No mismatches found yet, but verification is still in progress.")
+			} else {
+				statusLine = fmt.Sprintf(okSymbol + " No mismatches found. Source & destination completely match!")
+			}
 		} else {
-			statusLine = fmt.Sprintf(okSymbol + " No mismatches found. Source & destination completely match!")
-		}
-	} else {
-		switch genstatus {
-		case Gen0MetadataAnalysisComplete:
-			fallthrough
-		case GenerationInProgress:
-			statusLine = "This generation has nothing to compare."
-		case GenerationComplete:
-			statusLine = "This generation had nothing to compare."
-		default:
-			panic("Bad generation status: " + genstatus)
-		}
+			switch genstatus {
+			case Gen0MetadataAnalysisComplete:
+				fallthrough
+			case GenerationInProgress:
+				statusLine = "This generation has nothing to compare."
+			case GenerationComplete:
+				statusLine = "This generation had nothing to compare."
+			default:
+				panic("Bad generation status: " + genstatus)
+			}
 
-		statusLine = okSymbol + " " + statusLine
-	}
+			statusLine = okSymbol + " " + statusLine
+		}
+	*/
 
 	strBuilder.WriteString("\n" + statusLine + "\n")
 
 	elapsed := time.Since(reportGenStartTime)
+	verifier.logger.Info().
+		Stringer("elapsed", elapsed).
+		Msg("Done generating report.")
 	if elapsed > progressReportTimeWarnThreshold {
 		verifier.logger.Warn().
 			Stringer("elapsed", elapsed).

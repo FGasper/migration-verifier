@@ -125,9 +125,9 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 func (verifier *Verifier) RunChangeEventHandler(ctx context.Context, reader *ChangeStreamReader) error {
 	var err error
 
+	var afterLastHandleTime, gotBatchTime time.Time
 HandlerLoop:
 	for err == nil {
-		var afterLastHandleTime, gotBatchTime time.Time
 
 		select {
 		case <-ctx.Done():
