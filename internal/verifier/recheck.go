@@ -356,6 +356,8 @@ func (verifier *Verifier) getPreviousGenerationWhileLocked() int {
 //
 // The verifier **MUST** be locked when this function is called (or panic).
 func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) error {
+	startTime := time.Now()
+
 	prevGeneration := verifier.getPreviousGenerationWhileLocked()
 
 	verifier.logger.Debug().
@@ -494,6 +496,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			Int("generation", 1+prevGeneration).
 			Int64("totalDocs", int64(totalDocs)).
 			Str("totalData", reportutils.FmtBytes(totalRecheckData)).
+			Stringer("elapsed", time.Since(startTime)).
 			Msg("Scheduled documents for recheck in the new generation.")
 	}
 
