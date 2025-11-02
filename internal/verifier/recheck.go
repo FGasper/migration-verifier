@@ -50,7 +50,7 @@ type RecheckPrimaryKey struct {
 
 var _ bson.Marshaler = &RecheckPrimaryKey{}
 
-func (rk *RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
+func (rk RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
 	panic("nonono")
 	/*
 		return bsoncore.NewDocumentBuilder().
@@ -76,7 +76,7 @@ type RecheckDoc struct {
 
 var _ bson.Marshaler = &RecheckDoc{}
 
-func (rd *RecheckDoc) MarshalBSON() ([]byte, error) {
+func (rd RecheckDoc) MarshalBSON() ([]byte, error) {
 	id := strings.Join(
 		[]string{
 			rd.PrimaryKey.SrcDatabaseName,
