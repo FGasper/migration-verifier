@@ -3,6 +3,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
 	"github.com/10gen/migration-verifier/internal/metrics"
@@ -19,8 +20,8 @@ import (
 )
 
 const (
-	recheckBatchByteLimit  = 1024 * 1024
-	recheckBatchCountLimit = 1000
+	recheckBatchByteLimit  = 256 * 1024
+	recheckBatchCountLimit = 500
 
 	recheckQueueCollectionNameBase = "recheckQueue"
 )
@@ -28,6 +29,8 @@ const (
 var (
 	recheckBatchSizeRecorder    = lo.Must(metrics.Meter.Int64Histogram("recheck-batch-size"))
 	recheckWriteThreadsRecorder = lo.Must(metrics.Meter.Int64Histogram("recheck-write-threads"))
+	recheckDispatchMSRecorder   = lo.Must(metrics.Meter.Int64Histogram("recheck-dispatch-ms"))
+	recheckAwaitMSRecorder      = lo.Must(metrics.Meter.Int64Histogram("recheck-wait-ms"))
 )
 
 // RecheckPrimaryKey stores the implicit type of recheck to perform
@@ -170,6 +173,8 @@ func (verifier *Verifier) insertRecheckDocs(
 		})
 	}
 
+	beforeSends := time.Now()
+
 	curRechecks := make([]bson.Raw, 0, recheckBatchCountLimit)
 	curBatchBytes := 0
 	for i, dbName := range dbNames {
@@ -204,6 +209,9 @@ func (verifier *Verifier) insertRecheckDocs(
 		sendRechecks(curRechecks)
 	}
 
+	afterSends := time.Now()
+	recheckDispatchMSRecorder.Record(ctx, afterSends.Sub(beforeSends).Milliseconds())
+
 	if err := eg.Wait(); err != nil {
 		return errors.Wrapf(
 			err,
@@ -212,6 +220,8 @@ func (verifier *Verifier) insertRecheckDocs(
 			generation,
 		)
 	}
+
+	recheckAwaitMSRecorder.Record(ctx, time.Since(afterSends).Milliseconds())
 
 	recheckBatchSizeRecorder.Record(ctx, int64(len(documentIDs)))
 	recheckWriteThreadsRecorder.Record(ctx, int64(insertThreads))
