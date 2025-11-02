@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
@@ -50,14 +51,17 @@ type RecheckPrimaryKey struct {
 var _ bson.Marshaler = &RecheckPrimaryKey{}
 
 func (rk *RecheckPrimaryKey) MarshalBSON() ([]byte, error) {
-	return bsoncore.NewDocumentBuilder().
-		AppendString("db", rk.SrcDatabaseName).
-		AppendString("coll", rk.SrcCollectionName).
-		AppendValue("docID", bsoncore.Value{
-			Type: bsoncore.Type(rk.DocumentID.Type),
-			Data: rk.DocumentID.Value,
-		}).
-		Build(), nil
+	panic("nonono")
+	/*
+		return bsoncore.NewDocumentBuilder().
+			AppendString("db", rk.SrcDatabaseName).
+			AppendString("coll", rk.SrcCollectionName).
+			AppendValue("docID", bsoncore.Value{
+				Type: bsoncore.Type(rk.DocumentID.Type),
+				Data: rk.DocumentID.Value,
+			}).
+			Build(), nil
+	*/
 }
 
 // RecheckDoc stores the necessary information to know which documents must be rechecked.
@@ -73,10 +77,46 @@ type RecheckDoc struct {
 var _ bson.Marshaler = &RecheckDoc{}
 
 func (rd *RecheckDoc) MarshalBSON() ([]byte, error) {
+	id := strings.Join(
+		[]string{
+			rd.PrimaryKey.SrcDatabaseName,
+			rd.PrimaryKey.SrcCollectionName,
+			string(byte(rd.PrimaryKey.DocumentID.Type)),
+			string(rd.PrimaryKey.DocumentID.Value),
+		},
+		"\x00",
+	)
+
 	return bsoncore.NewDocumentBuilder().
-		AppendDocument("_id", lo.Must(bson.Marshal(rd.PrimaryKey))).
+		AppendString("_id", id).
 		AppendInt64("dataSize", int64(rd.DataSize)).
 		Build(), nil
+}
+
+var _ bson.Unmarshaler = &RecheckDoc{}
+
+func (rd *RecheckDoc) UnmarshalBSON(in []byte) error {
+	inRaw := bson.Raw(in)
+
+	idStr := lo.Must(inRaw.LookupErr("_id")).StringValue()
+	pieces := strings.SplitN(idStr, "\x00", 4)
+
+	if len(pieces[2]) != 1 {
+		panic(fmt.Sprintf("Weird _id (3rd piece should be len==1): %#q", idStr))
+	}
+
+	rd.PrimaryKey = RecheckPrimaryKey{
+		SrcDatabaseName:   pieces[0],
+		SrcCollectionName: pieces[1],
+		DocumentID: bson.RawValue{
+			Type:  bson.Type(byte(pieces[2][0])),
+			Value: []byte(pieces[3]),
+		},
+	}
+
+	rd.DataSize = int(lo.Must(inRaw.LookupErr("dataSize")).AsInt64())
+
+	return nil
 }
 
 // InsertFailedCompareRecheckDocs is for inserting RecheckDocs based on failures during Check.
