@@ -3,6 +3,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
@@ -225,6 +226,15 @@ func (verifier *Verifier) insertRecheckDocs(
 
 	recheckBatchSizeRecorder.Record(ctx, int64(len(documentIDs)))
 	recheckWriteThreadsRecorder.Record(ctx, int64(insertThreads))
+
+	if rand.Float64() < 0.01 {
+		verifier.logger.Info().
+			Int("rechecks enqueued", len(documentIDs)).
+			Int("insert threads", insertThreads).
+			Stringer("timeToPrepare", afterSends.Sub(beforeSends)).
+			Stringer("timeToEnqueue", time.Since(afterSends)).
+			Msg("Recheck statistics.")
+	}
 
 	verifier.logger.Trace().
 		Int("generation", generation).

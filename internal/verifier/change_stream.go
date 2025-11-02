@@ -3,6 +3,7 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/10gen/migration-verifier/history"
@@ -126,6 +127,8 @@ func (verifier *Verifier) RunChangeEventHandler(ctx context.Context, reader *Cha
 
 HandlerLoop:
 	for err == nil {
+		var afterLastHandleTime, gotBatchTime time.Time
+
 		select {
 		case <-ctx.Done():
 			err = util.WrapCtxErrWithCause(ctx)
@@ -135,6 +138,12 @@ HandlerLoop:
 				Stringer("changeStreamReader", reader).
 				Msg("Change event handler failed.")
 		case batch, more := <-reader.changeEventBatchChan:
+			gotBatchTime = time.Now()
+			if rand.Float64() < 0.01 {
+				verifier.logger.Info().
+					Stringer("timeBetweenBatches", gotBatchTime.Sub(afterLastHandleTime)).
+					Msg("Recheck statistics.")
+			}
 			if !more {
 				verifier.logger.Debug().
 					Stringer("changeStreamReader", reader).
@@ -153,6 +162,14 @@ HandlerLoop:
 				verifier.HandleChangeStreamEvents(ctx, batch, reader.readerType),
 				"failed to handle change stream events",
 			)
+
+			afterLastHandleTime = time.Now()
+
+			if rand.Float64() < 0.01 {
+				verifier.logger.Info().
+					Stringer("timeToHandle", afterLastHandleTime.Sub(gotBatchTime)).
+					Msg("Recheck statistics.")
+			}
 		}
 	}
 
