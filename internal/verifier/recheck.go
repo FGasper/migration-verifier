@@ -19,6 +19,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
+	"golang.org/x/exp/slices"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -448,36 +450,46 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	}
 	defer cursor.Close(ctx)
 
-	persistBufferedRechecks := func() error {
+	eg, egCtx := errgroup.WithContext(ctx)
+	egCancelCtx, canceler := contextplus.WithCancelCause(egCtx)
+
+	persistBufferedRechecks := func() {
 		if len(idAccum) == 0 {
-			return nil
+			return
 		}
 
 		namespace := prevDBName + "." + prevCollName
+		ids := slices.Clone(idAccum)
+		dataSize := types.ByteCount(dataSizeAccum)
 
-		task, err := verifier.InsertDocumentRecheckTask(
-			ctx,
-			idAccum,
-			types.ByteCount(dataSizeAccum),
-			namespace,
+		eg.Go(
+			func() error {
+				task, err := verifier.InsertDocumentRecheckTask(
+					egCancelCtx,
+					ids,
+					dataSize,
+					namespace,
+				)
+
+				if err != nil {
+					return errors.Wrapf(
+						err,
+						"failed to create a %d-document recheck task for collection %#q",
+						len(idAccum),
+						namespace,
+					)
+				}
+
+				verifier.logger.Debug().
+					Any("task", task.PrimaryKey).
+					Str("namespace", namespace).
+					Int("numDocuments", len(idAccum)).
+					Str("dataSize", reportutils.FmtBytes(dataSizeAccum)).
+					Msg("Created document recheck task.")
+
+				return nil
+			},
 		)
-		if err != nil {
-			return errors.Wrapf(
-				err,
-				"failed to create a %d-document recheck task for collection %#q",
-				len(idAccum),
-				namespace,
-			)
-		}
-
-		verifier.logger.Debug().
-			Any("task", task.PrimaryKey).
-			Str("namespace", namespace).
-			Int("numDocuments", len(idAccum)).
-			Str("dataSize", reportutils.FmtBytes(dataSizeAccum)).
-			Msg("Created document recheck task.")
-
-		return nil
 	}
 
 	// We group these here using a sort rather than using aggregate because aggregate is
@@ -503,10 +515,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			types.ByteCount(idsSizer.Len()) >= maxRecheckIDsBytes ||
 			dataSizeAccum >= verifier.partitionSizeInBytes {
 
-			err := persistBufferedRechecks()
-			if err != nil {
-				return err
-			}
+			persistBufferedRechecks()
 
 			prevDBName = doc.PrimaryKey.SrcDatabaseName
 			prevCollName = doc.PrimaryKey.SrcCollectionName
@@ -525,10 +534,14 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 
 	err = cursor.Err()
 	if err != nil {
+		canceler(err)
 		return err
 	}
 
-	err = persistBufferedRechecks()
+	persistBufferedRechecks()
+
+	err = eg.Wait()
+	canceler(nil)
 
 	if err == nil && totalDocs > 0 {
 		verifier.logger.Info().
