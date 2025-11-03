@@ -142,6 +142,7 @@ HandlerLoop:
 			if rand.Float64() < 0.1 {
 				verifier.logger.Info().
 					Stringer("timeBetweenBatches", gotBatchTime.Sub(afterLastHandleTime)).
+					Int("batchSize", len(batch.events)).
 					Int("batchesStillPending", len(reader.changeEventBatchChan)).
 					Msg("Recheck pre-handle statistics.")
 			}
@@ -168,6 +169,7 @@ HandlerLoop:
 
 			if rand.Float64() < 0.1 {
 				verifier.logger.Info().
+					Int("batchSize", len(batch.events)).
 					Stringer("timeToHandle", afterLastHandleTime.Sub(gotBatchTime)).
 					Msg("Recheck post-handle statistics.")
 			}
