@@ -223,9 +223,14 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 
 	verifier.logger.Info().Msg("Starting change streams.")
 
+	persistMsgChan, persistorErrEventual := verifier.runPersistor(
+		ctx,
+		verifier.metaClient.Database(metaDBName).Collection(metadataChangeStreamCollectionName),
+	)
+
 	// Now that we’ve initialized verifier.generation we can
 	// start the change stream readers.
-	verifier.initializeChangeStreamReaders()
+	verifier.initializeChangeStreamReaders(persistMsgChan)
 	verifier.mux.Unlock()
 
 	err = retry.New().WithCallback(
@@ -261,7 +266,6 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 		verifier.phase = Idle
 	}()
 
-	ceHandlerGroup, groupCtx := contextplus.ErrGroup(ctx)
 	for _, csReader := range []*ChangeStreamReader{verifier.srcChangeStreamReader, verifier.dstChangeStreamReader} {
 		if csReader.changeStreamRunning {
 			verifier.logger.Debug().Msgf("Check: %s already running.", csReader)
@@ -272,9 +276,6 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 			if err != nil {
 				return errors.Wrapf(err, "failed to start %s", csReader)
 			}
-			ceHandlerGroup.Go(func() error {
-				return verifier.RunChangeEventHandler(groupCtx, csReader)
-			})
 		}
 	}
 
@@ -376,9 +377,11 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 					Msg("Change stream reader finished.")
 			}
 
-			if err = ceHandlerGroup.Wait(); err != nil {
-				return err
+			<-persistorErrEventual.Ready()
+			if err = persistorErrEventual.Get(); err != nil {
+				return errors.Wrap(err, "recheck persistor")
 			}
+
 			verifier.mux.Lock()
 			verifier.lastGeneration = true
 		}

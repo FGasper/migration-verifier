@@ -74,12 +74,12 @@ type ChangeStreamReader struct {
 	watcherClient *mongo.Client
 	clusterInfo   util.ClusterInfo
 
-	changeStreamRunning  bool
-	changeEventBatchChan chan changeEventBatch
-	writesOffTs          *util.Eventual[bson.Timestamp]
-	readerError          *util.Eventual[error]
-	handlerError         *util.Eventual[error]
-	doneChan             chan struct{}
+	changeStreamRunning bool
+	toPersistorChan     chan<- recheckPersistorMessage
+	writesOffTs         *util.Eventual[bson.Timestamp]
+	readerError         *util.Eventual[error]
+	handlerError        *util.Eventual[error]
+	doneChan            chan struct{}
 
 	startAtTs *bson.Timestamp
 
@@ -89,7 +89,9 @@ type ChangeStreamReader struct {
 	onDDLEvent ddlEventHandling
 }
 
-func (verifier *Verifier) initializeChangeStreamReaders() {
+func (verifier *Verifier) initializeChangeStreamReaders(
+	toPersistor chan<- recheckPersistorMessage,
+) {
 	srcReader := &ChangeStreamReader{
 		readerType:    src,
 		namespaces:    verifier.srcNamespaces,
@@ -111,7 +113,7 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 	for _, csr := range mslices.Of(srcReader, dstReader) {
 		csr.logger = verifier.logger
 		csr.metaDB = verifier.metaClient.Database(verifier.metaDBName)
-		csr.changeEventBatchChan = make(chan changeEventBatch, batchChanBufferSize)
+		csr.toPersistorChan = toPersistor
 		csr.writesOffTs = util.NewEventual[bson.Timestamp]()
 		csr.readerError = util.NewEventual[error]()
 		csr.handlerError = util.NewEventual[error]()
@@ -121,6 +123,7 @@ func (verifier *Verifier) initializeChangeStreamReaders() {
 	}
 }
 
+/*
 // RunChangeEventHandler handles change event batches from the reader.
 // It needs to be started after the reader starts and should run in its own
 // goroutine.
@@ -167,21 +170,23 @@ HandlerLoop:
 
 	return err
 }
+*/
 
+/*
 // HandleChangeStreamEvents performs the necessary work for change stream events after receiving a batch.
-func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch changeEventBatch, eventOrigin whichCluster) error {
-	if len(batch.events) == 0 {
+func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, events []ParsedEvent, eventOrigin whichCluster) error {
+	if len(events) == 0 {
 		return nil
 	}
 
-	dbNames := make([]string, len(batch.events))
-	collNames := make([]string, len(batch.events))
-	docIDs := make([]bson.RawValue, len(batch.events))
-	dataSizes := make([]int, len(batch.events))
+	dbNames := make([]string, len(events))
+	collNames := make([]string, len(events))
+	docIDs := make([]bson.RawValue, len(events))
+	dataSizes := make([]int, len(events))
 
 	latestTimestamp := bson.Timestamp{}
 
-	for i, changeEvent := range batch.events {
+	for i, changeEvent := range events {
 		if !supportedEventOpTypes.Contains(changeEvent.OpType) {
 			panic(fmt.Sprintf("Unsupported optype in event; should have failed already! event=%+v", changeEvent))
 		}
@@ -251,18 +256,17 @@ func (verifier *Verifier) HandleChangeStreamEvents(ctx context.Context, batch ch
 	}
 
 	latestTimestampTime := time.Unix(int64(latestTimestamp.T), 0)
-	lag := time.Unix(int64(batch.clusterTime.T), 0).Sub(latestTimestampTime)
 
 	verifier.logger.Trace().
 		Str("origin", string(eventOrigin)).
 		Int("count", len(docIDs)).
 		Any("latestTimestamp", latestTimestamp).
 		Time("latestTimestampTime", latestTimestampTime).
-		Stringer("lag", lag).
 		Msg("Persisting rechecks for change events.")
 
 	return verifier.insertRecheckDocs(ctx, dbNames, collNames, docIDs, dataSizes)
 }
+*/
 
 // GetChangeStreamFilter returns an aggregation pipeline that filters
 // namespaces as per configuration.
@@ -467,15 +471,25 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		return util.WrapCtxErrWithCause(ctx)
 	case <-csr.handlerError.Ready():
 		return csr.wrapHandlerErrorForReader()
-	case csr.changeEventBatchChan <- changeEventBatch{
-		events: changeEvents,
-
-		// NB: We know by now that OperationTime is non-nil.
-		clusterTime: *sess.OperationTime(),
-	}:
+	case csr.toPersistorChan <- recheckBatch(changeEvents):
 	}
 
-	ri.NoteSuccess("sent %d-event batch to handler", len(changeEvents))
+	ri.NoteSuccess("sent %d-event batch to persistor", len(changeEvents))
+
+	var resumeTokenMsg recheckPersistorMessage
+	if csr.readerType == src {
+		resumeTokenMsg = sourceResumeToken(cs.ResumeToken())
+	} else {
+		resumeTokenMsg = sourceResumeToken(cs.ResumeToken())
+	}
+
+	select {
+	case <-ctx.Done():
+		return util.WrapCtxErrWithCause(ctx)
+	case <-csr.handlerError.Ready():
+		return csr.wrapHandlerErrorForReader()
+	case csr.toPersistorChan <- resumeTokenMsg:
+	}
 
 	return nil
 }
@@ -493,21 +507,6 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 	cs *mongo.ChangeStream,
 	sess *mongo.Session,
 ) error {
-	var lastPersistedTime time.Time
-
-	persistResumeTokenIfNeeded := func() error {
-		if time.Since(lastPersistedTime) <= minChangeStreamPersistInterval {
-			return nil
-		}
-
-		err := csr.persistChangeStreamResumeToken(ctx, cs)
-		if err == nil {
-			lastPersistedTime = time.Now()
-		}
-
-		return err
-	}
-
 	for {
 		var err error
 		var gotwritesOffTimestamp bool
@@ -570,10 +569,6 @@ func (csr *ChangeStreamReader) iterateChangeStream(
 
 		default:
 			err = csr.readAndHandleOneChangeEventBatch(ctx, ri, cs, sess)
-
-			if err == nil {
-				err = persistResumeTokenIfNeeded()
-			}
 
 			if err != nil {
 				return err
@@ -699,16 +694,6 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 	initialCreateResultChan := make(chan mo.Result[bson.Timestamp])
 
 	go func() {
-		// Closing changeEventBatchChan at the end of change stream goroutine
-		// notifies the verifier's change event handler to exit.
-		defer func() {
-			csr.logger.Debug().
-				Stringer("changeStreamReader", csr).
-				Msg("Closing change event batch channel.")
-
-			close(csr.changeEventBatchChan)
-		}()
-
 		retryer := retry.New().WithErrorCodes(util.CursorKilledErrCode)
 
 		parentThreadWaiting := true
@@ -783,7 +768,7 @@ func (csr *ChangeStreamReader) GetLag() option.Option[time.Duration] {
 // a fraction. If saturation rises, that means we’re reading events faster than
 // we can persist them.
 func (csr *ChangeStreamReader) GetSaturation() float64 {
-	return util.DivideToF64(len(csr.changeEventBatchChan), cap(csr.changeEventBatchChan))
+	return util.DivideToF64(len(csr.toPersistorChan), cap(csr.toPersistorChan))
 }
 
 // GetEventsPerSecond returns the number of change events per second we’ve been
