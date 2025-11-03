@@ -20,7 +20,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 	"golang.org/x/exp/slices"
-	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -450,13 +449,16 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	}
 	defer cursor.Close(ctx)
 
-	eg, egCtx := errgroup.WithContext(ctx)
+	eg, egCtx := contextplus.ErrGroup(ctx)
 	egCancelCtx, canceler := contextplus.WithCancelCause(egCtx)
 
+	persistThreads := 0
 	persistBufferedRechecks := func() {
 		if len(idAccum) == 0 {
 			return
 		}
+
+		persistThreads++
 
 		namespace := prevDBName + "." + prevCollName
 		ids := slices.Clone(idAccum)
@@ -548,6 +550,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			Int("generation", 1+prevGeneration).
 			Int64("totalDocs", int64(totalDocs)).
 			Str("totalData", reportutils.FmtBytes(totalRecheckData)).
+			Int("persistThreads", persistThreads).
 			Stringer("elapsed", time.Since(startTime)).
 			Msg("Scheduled documents for recheck in the new generation.")
 	}
