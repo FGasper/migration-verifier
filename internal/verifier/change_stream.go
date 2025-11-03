@@ -480,7 +480,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	if csr.readerType == src {
 		resumeTokenMsg = sourceResumeToken(cs.ResumeToken())
 	} else {
-		resumeTokenMsg = sourceResumeToken(cs.ResumeToken())
+		resumeTokenMsg = destinationResumeToken(cs.ResumeToken())
 	}
 
 	select {
