@@ -2,9 +2,7 @@ package verifier
 
 import (
 	"context"
-	"os"
 	"strings"
-	"time"
 
 	"github.com/10gen/migration-verifier/contextplus"
 	"github.com/10gen/migration-verifier/internal/logger"
@@ -155,6 +153,7 @@ func (suite *IntegrationTestSuite) GetTopology(client *mongo.Client) util.Cluste
 	return clusterInfo.Topology
 }
 
+/*
 func (suite *IntegrationTestSuite) BuildVerifier() *Verifier {
 	qfilter := QueryFilter{Namespace: "keyhole.dealers"}
 	task := VerificationTask{QueryFilter: qfilter}
@@ -198,6 +197,7 @@ func (suite *IntegrationTestSuite) BuildVerifier() *Verifier {
 	suite.Require().NoError(verifier.AddMetaIndexes(ctx))
 	return verifier
 }
+*/
 
 func (suite *IntegrationTestSuite) DBNameForTest(suffixes ...string) string {
 	name := suite.T().Name()
