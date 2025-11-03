@@ -420,6 +420,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	verifier.logger.Debug().
 		Int("priorGeneration", prevGeneration).
 		Int("rechecksCount", int(rechecksCount)).
+		Stringer("timeToCount", time.Since(startTime)).
 		Msgf("Creating recheck tasks from prior generation’s enqueued rechecks.")
 
 	// We generate one recheck task per collection, unless
@@ -435,6 +436,8 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	var idsSizer util.BSONArraySizer
 	var totalDocs types.DocumentCount
 	var dataSizeAccum, totalRecheckData int64
+
+	beforeFind := time.Now()
 
 	// The sort here is important because the recheck _id is an embedded
 	// document that includes the namespace. Thus, all rechecks for a given
@@ -542,6 +545,8 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 
 	persistBufferedRechecks()
 
+	readCursorDone := time.Now()
+
 	err = eg.Wait()
 	canceler(nil)
 
@@ -551,7 +556,8 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 			Int64("totalDocs", int64(totalDocs)).
 			Str("totalData", reportutils.FmtBytes(totalRecheckData)).
 			Int("persistThreads", persistThreads).
-			Stringer("elapsed", time.Since(startTime)).
+			Stringer("timeToRead", readCursorDone.Sub(beforeFind)).
+			Stringer("elapsed", time.Since(beforeFind)).
 			Msg("Scheduled documents for recheck in the new generation.")
 	}
 

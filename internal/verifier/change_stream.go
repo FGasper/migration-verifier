@@ -139,10 +139,11 @@ HandlerLoop:
 				Msg("Change event handler failed.")
 		case batch, more := <-reader.changeEventBatchChan:
 			gotBatchTime = time.Now()
-			if rand.Float64() < 0.01 {
+			if rand.Float64() < 0.1 {
 				verifier.logger.Info().
 					Stringer("timeBetweenBatches", gotBatchTime.Sub(afterLastHandleTime)).
-					Msg("Recheck statistics.")
+					Int("batchesStillPending", len(reader.changeEventBatchChan)).
+					Msg("Recheck pre-handle statistics.")
 			}
 			if !more {
 				verifier.logger.Debug().
@@ -165,10 +166,10 @@ HandlerLoop:
 
 			afterLastHandleTime = time.Now()
 
-			if rand.Float64() < 0.01 {
+			if rand.Float64() < 0.1 {
 				verifier.logger.Info().
 					Stringer("timeToHandle", afterLastHandleTime.Sub(gotBatchTime)).
-					Msg("Recheck statistics.")
+					Msg("Recheck post-handle statistics.")
 			}
 		}
 	}
