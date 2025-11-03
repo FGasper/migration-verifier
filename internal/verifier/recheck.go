@@ -270,10 +270,10 @@ func (verifier *Verifier) insertRecheckDocs(
 	recheckBatchSizeRecorder.Record(ctx, int64(len(documentIDs)))
 	recheckWriteThreadsRecorder.Record(ctx, int64(insertThreads))
 
-	if rand.Float64() < 0.01 {
+	if rand.Float64() < 0.1 {
 		verifier.logger.Info().
-			Int("rechecks enqueued", len(documentIDs)).
-			Int("insert threads", insertThreads).
+			Int("rechecksEnqueued", len(documentIDs)).
+			Int("insertThreads", insertThreads).
 			Stringer("timeToPrepare", afterSends.Sub(beforeSends)).
 			Stringer("timeToEnqueue", time.Since(afterSends)).
 			Msg("Recheck statistics.")
@@ -445,7 +445,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	cursor, err := recheckColl.Find(
 		ctx,
 		bson.D{},
-		//options.Find().SetSort(bson.D{{"_id", 1}}),
+		options.Find().SetSort(bson.D{{"_id", 1}}),
 	)
 	if err != nil {
 		return err
