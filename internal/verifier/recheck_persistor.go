@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"sync"
 
 	"github.com/10gen/migration-verifier/internal/util"
 	"github.com/pkg/errors"
@@ -31,10 +32,27 @@ type recheckBatch []ParsedEvent
 
 func (recheckBatch) isRecheckMessage() {}
 
-func (v *Verifier) runPersistor(
+type persistor struct {
+	mux         sync.Mutex
+	openWriters int
+	theChan     chan<- recheckPersistorMessage
+}
+
+func (p *persistor) closeOne() {
+	p.mux.Lock()
+	defer p.mux.Unlock()
+
+	p.openWriters--
+
+	if p.openWriters == 0 {
+		close(p.theChan)
+	}
+}
+
+func (v *Verifier) createPersistor(
 	ctx context.Context,
 	metaColl *mongo.Collection,
-) (chan<- recheckPersistorMessage, *util.Eventual[error]) {
+) (*persistor, *util.Eventual[error]) {
 	inChan := make(chan recheckPersistorMessage, 1_000)
 
 	errEventual := util.NewEventual[error]()
@@ -131,7 +149,10 @@ func (v *Verifier) runPersistor(
 		}
 	}()
 
-	return inChan, errEventual
+	return &persistor{
+		openWriters: 2,
+		theChan:     inChan,
+	}, errEventual
 }
 
 /*

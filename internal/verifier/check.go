@@ -223,14 +223,14 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 
 	verifier.logger.Info().Msg("Starting change streams.")
 
-	persistMsgChan, persistorErrEventual := verifier.runPersistor(
+	persistor, persistorErrEventual := verifier.createPersistor(
 		ctx,
 		verifier.metaClient.Database(metaDBName).Collection(metadataChangeStreamCollectionName),
 	)
 
 	// Now that we’ve initialized verifier.generation we can
 	// start the change stream readers.
-	verifier.initializeChangeStreamReaders(persistMsgChan)
+	verifier.initializeChangeStreamReaders(persistor)
 	verifier.mux.Unlock()
 
 	err = retry.New().WithCallback(

@@ -75,7 +75,7 @@ type ChangeStreamReader struct {
 	clusterInfo   util.ClusterInfo
 
 	changeStreamRunning bool
-	toPersistorChan     chan<- recheckPersistorMessage
+	persistor           *persistor
 	writesOffTs         *util.Eventual[bson.Timestamp]
 	readerError         *util.Eventual[error]
 	handlerError        *util.Eventual[error]
@@ -90,7 +90,7 @@ type ChangeStreamReader struct {
 }
 
 func (verifier *Verifier) initializeChangeStreamReaders(
-	toPersistor chan<- recheckPersistorMessage,
+	persistor *persistor,
 ) {
 	srcReader := &ChangeStreamReader{
 		readerType:    src,
@@ -113,7 +113,7 @@ func (verifier *Verifier) initializeChangeStreamReaders(
 	for _, csr := range mslices.Of(srcReader, dstReader) {
 		csr.logger = verifier.logger
 		csr.metaDB = verifier.metaClient.Database(verifier.metaDBName)
-		csr.toPersistorChan = toPersistor
+		csr.persistor = persistor
 		csr.writesOffTs = util.NewEventual[bson.Timestamp]()
 		csr.readerError = util.NewEventual[error]()
 		csr.handlerError = util.NewEventual[error]()
@@ -471,7 +471,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		return util.WrapCtxErrWithCause(ctx)
 	case <-csr.handlerError.Ready():
 		return csr.wrapHandlerErrorForReader()
-	case csr.toPersistorChan <- recheckBatch(changeEvents):
+	case csr.persistor.theChan <- recheckBatch(changeEvents):
 	}
 
 	ri.NoteSuccess("sent %d-event batch to persistor", len(changeEvents))
@@ -488,7 +488,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 		return util.WrapCtxErrWithCause(ctx)
 	case <-csr.handlerError.Ready():
 		return csr.wrapHandlerErrorForReader()
-	case csr.toPersistorChan <- resumeTokenMsg:
+	case csr.persistor.theChan <- resumeTokenMsg:
 	}
 
 	return nil
@@ -694,6 +694,16 @@ func (csr *ChangeStreamReader) StartChangeStream(ctx context.Context) error {
 	initialCreateResultChan := make(chan mo.Result[bson.Timestamp])
 
 	go func() {
+		// Closing changeEventBatchChan at the end of change stream goroutine
+		// notifies the verifier's change event handler to exit.
+		defer func() {
+			csr.logger.Debug().
+				Stringer("changeStreamReader", csr).
+				Msg("Closing persistor channel.")
+
+			csr.persistor.closeOne()
+		}()
+
 		retryer := retry.New().WithErrorCodes(util.CursorKilledErrCode)
 
 		parentThreadWaiting := true
@@ -768,7 +778,7 @@ func (csr *ChangeStreamReader) GetLag() option.Option[time.Duration] {
 // a fraction. If saturation rises, that means we’re reading events faster than
 // we can persist them.
 func (csr *ChangeStreamReader) GetSaturation() float64 {
-	return util.DivideToF64(len(csr.toPersistorChan), cap(csr.toPersistorChan))
+	return util.DivideToF64(len(csr.persistor.theChan), cap(csr.persistor.theChan))
 }
 
 // GetEventsPerSecond returns the number of change events per second we’ve been

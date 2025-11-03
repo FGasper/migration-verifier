@@ -134,6 +134,7 @@ type Verifier struct {
 
 	srcChangeStreamReader *ChangeStreamReader
 	dstChangeStreamReader *ChangeStreamReader
+	toPersistorChan       chan<- recheckPersistorMessage
 
 	readConcernSetting ReadConcernSetting
 
