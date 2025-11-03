@@ -445,7 +445,7 @@ func (verifier *Verifier) GenerateRecheckTasksWhileLocked(ctx context.Context) e
 	cursor, err := recheckColl.Find(
 		ctx,
 		bson.D{},
-		options.Find().SetSort(bson.D{{"_id", 1}}),
+		//options.Find().SetSort(bson.D{{"_id", 1}}),
 	)
 	if err != nil {
 		return err
