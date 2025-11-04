@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -484,6 +485,8 @@ func TolerateSimpleDuplicateKeyInBulk(
 				Msg("Ignoring duplicate key error on recheck inserts.")
 
 			err = nil
+
+			fmt.Printf("--- %d dupes found in batch of %d\n", len(writeCodes), docsCount)
 		}
 	}
 
