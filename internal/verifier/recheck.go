@@ -112,6 +112,8 @@ func (verifier *Verifier) insertRecheckDocs(
 		dataSizes,
 	)
 
+	fmt.Printf("-- deduplicated %d rechecks to %d\n", len(documentIDs), len(rawDocIDs))
+
 	generation, _ := verifier.getGenerationWhileLocked()
 
 	eg, groupCtx := contextplus.ErrGroup(ctx)
