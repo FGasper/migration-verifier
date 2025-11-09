@@ -344,10 +344,7 @@ func (verifier *Verifier) GenerateRecheckTasks(ctx context.Context) error {
 			return err
 		}
 
-		idRaw, err := cursor.Current.LookupErr("_id", "docID")
-		if err != nil {
-			return errors.Wrapf(err, "failed to find docID in enqueued recheck %v", cursor.Current)
-		}
+		idRaw := doc.PrimaryKey.DocumentID
 
 		// We persist rechecks if any of these happen:
 		// - the namespace has changed
