@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"golang.org/x/exp/slices"
 )
 
 func (verifier *Verifier) findLatestPartitionUpperBound(
@@ -236,6 +237,8 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 			if err != nil {
 				return 0, 0, 0, errors.Wrapf(err, "fetching %#q from %#q’s sampling cursor", "_id", srcNs)
 			}
+
+			upperBound.Value = slices.Clone(upperBound.Value)
 
 			err = createAndInsertPartition(lowerBound, upperBound)
 			if err != nil {

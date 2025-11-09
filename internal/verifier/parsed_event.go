@@ -8,6 +8,7 @@ import (
 	"github.com/10gen/migration-verifier/option"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"golang.org/x/exp/slices"
 )
 
 // ParsedEvent contains the fields of an event that we have parsed from 'bson.Raw'.
@@ -76,6 +77,7 @@ func (pe *ParsedEvent) UnmarshalFromBSON(in []byte) error {
 			}
 
 			pe.DocID = rv
+			pe.DocID.Value = slices.Clone(pe.DocID.Value)
 		case "fullDocument":
 			err := mbson.UnmarshalElementValue(el, &pe.FullDocument)
 			if err != nil {

@@ -489,6 +489,10 @@ func (c *connection) read(ctx context.Context, dst []byte) (bytesRead []byte, er
 	dst = dst[:0]
 	dst = slices.Grow(dst, int(size))
 	dst = dst[:size]
+	//clear(dst[:size])
+	for i := range dst {
+		dst[i] = 0
+	}
 
 	copy(dst, sizeBuf[:])
 
