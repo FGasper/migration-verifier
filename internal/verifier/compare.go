@@ -531,7 +531,7 @@ func iterateCursorToChannel(
 			sctx,
 			writer,
 			docWithTs{
-				doc: slices.Clone(cursor.Current),
+				doc: cursor.Current,
 				ts:  clusterTime,
 			},
 		)
