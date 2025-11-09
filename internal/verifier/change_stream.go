@@ -490,7 +490,7 @@ func (csr *ChangeStreamReader) readAndHandleOneChangeEventBatch(
 	case csr.changeEventBatchChan <- changeEventBatch{
 		events: changeEvents,
 
-		resumeToken: cs.ResumeToken(),
+		resumeToken: slices.Clone(cs.ResumeToken()),
 
 		// NB: We know by now that OperationTime is non-nil.
 		clusterTime: *sess.OperationTime(),

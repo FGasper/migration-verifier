@@ -3,6 +3,7 @@ package partitions
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/reportutils"
@@ -504,7 +505,7 @@ func getOuterIDBound(
 		return nil, errors.Errorf("unknown minOrMaxBound parameter '%v' when getting outer _id bound", minOrMaxBound)
 	}
 
-	var docID any
+	var docID bson.RawValue
 
 	var pipeline mongo.Pipeline
 	if len(globalFilter) > 0 {
@@ -540,6 +541,7 @@ func getOuterIDBound(
 
 			// Return the _id value from that document.
 			docID, cmdErr = cursor.Current.LookupErr("_id")
+			docID.Value = slices.Clone(docID.Value)
 			return cmdErr
 		},
 		"finding %#q's %s _id",
