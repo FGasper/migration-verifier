@@ -59,6 +59,8 @@ type BatchCursor struct {
 	// legacy server (< 3.2) fields
 	limit       int32
 	numReturned int32 // number of docs returned by server
+
+	lastResponse []byte
 }
 
 // CursorResponse represents the response from a command the results in a cursor. A BatchCursor can
@@ -432,6 +434,8 @@ func (bc *BatchCursor) getMore(ctx context.Context) {
 		Database:   bc.database,
 		Deployment: bc.getOperationDeployment(),
 		ProcessResponseFn: func(_ context.Context, response bsoncore.Document, _ ResponseInfo) error {
+			bc.lastResponse = response
+
 			id, ok := response.Lookup("cursor", "id").Int64OK()
 			if !ok {
 				return fmt.Errorf("cursor.id should be an int64 but is a BSON %s", response.Lookup("cursor", "id").Type)
@@ -483,6 +487,8 @@ func (bc *BatchCursor) getMore(ctx context.Context) {
 		// Since this could be confusing, and there is no requirement
 		// to use a read preference here, we omit it.
 		omitReadPreference: true,
+
+		responseBuffer: bc.lastResponse,
 	}.Execute(ctx)
 
 	// Once the cursor has been drained, we can unpin the connection if one is currently pinned.

@@ -20,7 +20,7 @@ func (op Operation) ExecuteExhaust(ctx context.Context, conn *mnet.Connection) e
 		return errors.New("exhaust read must be done with a connection that is currently streaming")
 	}
 
-	res, err := op.readWireMessage(ctx, conn)
+	res, err := op.readWireMessage(ctx, conn, nil)
 	if err != nil {
 		return err
 	}

@@ -359,6 +359,8 @@ type Operation struct {
 	// where a default read preference is used when the operation
 	// ReadPreference is not specified.
 	omitReadPreference bool
+
+	responseBuffer []byte
 }
 
 // shouldEncrypt returns true if this operation should automatically be encrypted.
@@ -813,9 +815,11 @@ func (op Operation) Execute(ctx context.Context) error {
 			// flag is set
 			roundTrip := op.roundTrip
 			if moreToCome {
-				roundTrip = op.moreToComeRoundTrip
+				roundTrip = func(ctx context.Context, conn *mnet.Connection, wm []byte, _ []byte) ([]byte, error) {
+					return op.moreToComeRoundTrip(ctx, conn, wm)
+				}
 			}
-			res, err = roundTrip(ctx, conn, *wm)
+			res, err = roundTrip(ctx, conn, *wm, op.responseBuffer)
 
 			if ep, ok := srvr.(ErrorProcessor); ok {
 				_ = ep.ProcessError(err, conn)
@@ -1098,16 +1102,16 @@ func (op Operation) retryable(desc description.Server) bool {
 
 // roundTrip writes a wiremessage to the connection and then reads a wiremessage. The wm parameter
 // is reused when reading the wiremessage.
-func (op Operation) roundTrip(ctx context.Context, conn *mnet.Connection, wm []byte) ([]byte, error) {
+func (op Operation) roundTrip(ctx context.Context, conn *mnet.Connection, wm []byte, dst []byte) ([]byte, error) {
 	err := conn.Write(ctx, wm)
 	if err != nil {
 		return nil, op.networkError(err)
 	}
-	return op.readWireMessage(ctx, conn)
+	return op.readWireMessage(ctx, conn, dst)
 }
 
-func (op Operation) readWireMessage(ctx context.Context, conn *mnet.Connection) (result []byte, err error) {
-	wm, err := conn.Read(ctx)
+func (op Operation) readWireMessage(ctx context.Context, conn *mnet.Connection, dst []byte) (result []byte, err error) {
+	wm, err := conn.Read(ctx, dst)
 	if err != nil {
 		return nil, op.networkError(err)
 	}

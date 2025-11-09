@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -394,7 +395,7 @@ func (c *connection) write(ctx context.Context, wm []byte) (err error) {
 }
 
 // readWireMessage reads a wiremessage from the connection. The dst parameter will be overwritten.
-func (c *connection) readWireMessage(ctx context.Context) ([]byte, error) {
+func (c *connection) readWireMessage(ctx context.Context, dst []byte) ([]byte, error) {
 	if atomic.LoadInt64(&c.state) != connConnected {
 		return nil, ConnectionError{
 			ConnectionID: c.id,
@@ -407,7 +408,7 @@ func (c *connection) readWireMessage(ctx context.Context) ([]byte, error) {
 		return nil, ConnectionError{ConnectionID: c.id, Wrapped: err, message: "failed to set read deadline"}
 	}
 
-	dst, errMsg, err := c.read(ctx)
+	dst, errMsg, err := c.read(ctx, dst)
 	if err != nil {
 		if c.awaitRemainingBytes == nil {
 			// If the connection was not marked as awaiting response, close the
@@ -445,7 +446,7 @@ func (c *connection) parseWmSizeBytes(wmSizeBytes [4]byte) (int32, error) {
 	return size, nil
 }
 
-func (c *connection) read(ctx context.Context) (bytesRead []byte, errMsg string, err error) {
+func (c *connection) read(ctx context.Context, dst []byte) (bytesRead []byte, errMsg string, err error) {
 	go c.cancellationListener.Listen(ctx, c.cancellationListenerCallback)
 	defer func() {
 		// If the context is cancelled after we finish reading the server response, the cancellation listener could fire
@@ -485,7 +486,10 @@ func (c *connection) read(ctx context.Context) (bytesRead []byte, errMsg string,
 		return nil, err.Error(), err
 	}
 
-	dst := make([]byte, size)
+	dst = dst[:0]
+	dst = slices.Grow(dst, int(size))
+	dst = dst[:size]
+
 	copy(dst, sizeBuf[:])
 
 	n, err = io.ReadFull(c.nc, dst[4:])
@@ -609,8 +613,8 @@ func (c initConnection) LocalAddress() address.Address {
 func (c initConnection) Write(ctx context.Context, wm []byte) error {
 	return c.writeWireMessage(ctx, wm)
 }
-func (c initConnection) Read(ctx context.Context) ([]byte, error) {
-	return c.readWireMessage(ctx)
+func (c initConnection) Read(ctx context.Context, dst []byte) ([]byte, error) {
+	return c.readWireMessage(ctx, dst)
 }
 func (c initConnection) SetStreaming(streaming bool) {
 	c.setStreaming(streaming)
@@ -657,13 +661,13 @@ func (c *Connection) Write(ctx context.Context, wm []byte) error {
 
 // ReadWireMessage handles reading a wire message from the underlying connection. The dst parameter
 // will be overwritten with the new wire message.
-func (c *Connection) Read(ctx context.Context) ([]byte, error) {
+func (c *Connection) Read(ctx context.Context, dst []byte) ([]byte, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.connection == nil {
 		return nil, ErrConnectionClosed
 	}
-	return c.connection.readWireMessage(ctx)
+	return c.connection.readWireMessage(ctx, dst)
 }
 
 // CompressWireMessage handles compressing the provided wire message using the underlying

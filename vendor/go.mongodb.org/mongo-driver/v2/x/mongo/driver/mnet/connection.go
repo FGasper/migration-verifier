@@ -17,7 +17,7 @@ import (
 // ReadWriteCloser represents a Connection where server operations
 // can read from, written to, and closed.
 type ReadWriteCloser interface {
-	Read(ctx context.Context) ([]byte, error)
+	Read(ctx context.Context, dst []byte) ([]byte, error)
 	Write(ctx context.Context, wm []byte) error
 	io.Closer
 }
