@@ -422,6 +422,76 @@ func (verifier *Verifier) CheckDriver(ctx context.Context, filter bson.D, testCh
 	}
 }
 
+func (v *Verifier) initializeChangeReaders() {
+	var whyCS string
+
+	switch {
+	case len(v.srcNamespaces) > 0:
+		whyCS = "ns filter"
+	case v.srcClusterInfo.Topology == util.TopologySharded:
+		whyCS = "sharded"
+	case !util.ClusterHasBSONSize([2]int(v.srcClusterInfo.VersionArray)):
+		whyCS = "no $bsonSize"
+	}
+
+	srcLogEvent := v.logger.Info()
+
+	if whyCS == "" {
+		v.srcChangeReader = v.newOplogReader(
+			v.srcNamespaces,
+			src,
+			v.srcClient,
+			*v.srcClusterInfo,
+		)
+	} else {
+		srcLogEvent.Str("whyChangeStream", whyCS)
+
+		v.srcChangeReader = v.newChangeStreamReader(
+			v.srcNamespaces,
+			src,
+			v.srcClient,
+			*v.srcClusterInfo,
+		)
+	}
+
+	srcLogEvent.
+		Stringer("reader", v.srcChangeReader).
+		Msg("Listening for writes to source.")
+
+	switch {
+	case len(v.dstNamespaces) > 0:
+		whyCS = "ns filter"
+	case v.dstClusterInfo.Topology == util.TopologySharded:
+		whyCS = "sharded"
+	case !util.ClusterHasBSONSize([2]int(v.dstClusterInfo.VersionArray)):
+		whyCS = "no $bsonSize"
+	}
+
+	dstLogEvent := v.logger.Info()
+
+	if whyCS == "" {
+		v.dstChangeReader = v.newOplogReader(
+			v.dstNamespaces,
+			dst,
+			v.dstClient,
+			*v.dstClusterInfo,
+		)
+	} else {
+		dstLogEvent.Str("whyChangeStream", whyCS)
+
+		v.dstChangeReader = v.newChangeStreamReader(
+			v.dstNamespaces,
+			dst,
+			v.dstClient,
+			*v.dstClusterInfo,
+		)
+	}
+
+	dstLogEvent.
+		Stringer("reader", v.dstChangeReader).
+		Msg("Listening for writes to destination.")
+}
+
 func (verifier *Verifier) setupAllNamespaceList(ctx context.Context) error {
 	// We want to check all user collections on both source and dest.
 	srcNamespaces, err := ListAllUserNamespaces(ctx, verifier.logger, verifier.srcClient, verifier.metaDBName)
