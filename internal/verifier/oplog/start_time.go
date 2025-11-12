@@ -12,20 +12,25 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 )
 
-func GetTailingStartTime(
+func GetTailingStartTimes(
 	ctx context.Context,
 	client *mongo.Client,
-) (OpTime, error) {
+) (OpTime, OpTime, error) {
 	oldestTxn, err := getOldestTransactionTime(ctx, client)
 	if err != nil {
-		return OpTime{}, errors.Wrapf(err, "finding oldest txn")
+		return OpTime{}, OpTime{}, errors.Wrapf(err, "finding oldest txn")
+	}
+
+	latestTime, err := getLatestVisibleOplogOpTime(ctx, client)
+	if err != nil {
+		return OpTime{}, OpTime{}, errors.Wrapf(err, "finding latest optime")
 	}
 
 	if oldestTime, has := oldestTxn.Get(); has {
-		return oldestTime, nil
+		return oldestTime, latestTime, nil
 	}
 
-	return getLatestVisibleOplogOpTime(ctx, client)
+	return latestTime, latestTime, nil
 }
 
 type OpTime struct {

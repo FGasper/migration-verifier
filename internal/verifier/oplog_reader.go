@@ -59,21 +59,35 @@ func (o *OplogReader) start(ctx context.Context) error {
 		return errors.Wrap(err, "loading persisted resume token")
 	}
 
+	var allowDDLBeforeTS bson.Timestamp
+
 	if token, has := savedResumeToken.Get(); has {
 		var rt oplog.ResumeToken
 		if err := bson.Unmarshal(token, &rt); err != nil {
 			return errors.Wrap(err, "parsing persisted resume token")
 		}
 
+		// TODO: Smarten this rather than assuming we’ve passed the original
+		// latest optime.
+		allowDDLBeforeTS = rt.TS
+		allowDDLBeforeTS.T--
+
 		o.startAtTs = &rt.TS
 	} else {
-		startOpTime, err := oplog.GetTailingStartTime(ctx, o.watcherClient)
+		startOpTime, latestOpTime, err := oplog.GetTailingStartTimes(ctx, o.watcherClient)
 		if err != nil {
 			return errors.Wrapf(err, "getting start optime from %s", o.readerType)
 		}
 
+		allowDDLBeforeTS = latestOpTime.TS
+
 		o.startAtTs = &startOpTime.TS
 	}
+
+	o.logger.Info().
+		Any("startReadTs", *o.startAtTs).
+		Any("currentOplogTs", allowDDLBeforeTS).
+		Msg("Tailing oplog.")
 
 	sess, err := o.watcherClient.StartSession()
 	if err != nil {
@@ -139,6 +153,15 @@ func (o *OplogReader) start(ctx context.Context) error {
 						Else: "$$REMOVE",
 					}},
 
+					{"o", agg.Cond{
+						If: agg.And{
+							agg.Eq("$op", "c"),
+							agg.Eq("missing", agg.Type("$o.applyOps")),
+						},
+						Then: "$o",
+						Else: "$$REMOVE",
+					}},
+
 					{"ops", agg.Cond{
 						If: agg.And{
 							agg.Eq("$op", "c"),
@@ -168,7 +191,7 @@ func (o *OplogReader) start(ctx context.Context) error {
 	}
 
 	go func() {
-		if err := o.iterate(sctx, cursor); err != nil {
+		if err := o.iterate(sctx, cursor, allowDDLBeforeTS); err != nil {
 			o.readerError.Set(err)
 		}
 	}()
@@ -179,6 +202,7 @@ func (o *OplogReader) start(ctx context.Context) error {
 func (o *OplogReader) iterate(
 	sctx context.Context,
 	cursor *mongo.Cursor,
+	allowDDLBeforeTS bson.Timestamp,
 ) error {
 CursorLoop:
 	for {
@@ -193,7 +217,7 @@ CursorLoop:
 		case <-o.writesOffTs.Ready():
 			break CursorLoop
 		default:
-			err = o.readAndHandleOneBatch(sctx, cursor)
+			err = o.readAndHandleOneBatch(sctx, cursor, allowDDLBeforeTS)
 			if err != nil {
 				return err
 			}
@@ -210,7 +234,7 @@ CursorLoop:
 			}
 		}
 
-		err := o.readAndHandleOneBatch(sctx, cursor)
+		err := o.readAndHandleOneBatch(sctx, cursor, allowDDLBeforeTS)
 		if err != nil {
 			return err
 		}
@@ -247,8 +271,8 @@ var oplogOpToOperationType = map[string]string{
 func (o *OplogReader) readAndHandleOneBatch(
 	sctx context.Context,
 	cursor *mongo.Cursor,
+	allowDDLBeforeTS bson.Timestamp,
 ) error {
-	fmt.Printf("----- reading a batch\n")
 	var err error
 
 	o.curDocs = o.curDocs[:0]
@@ -258,7 +282,6 @@ func (o *OplogReader) readAndHandleOneBatch(
 	if err != nil {
 		return errors.Wrap(err, "reading cursor")
 	}
-	fmt.Printf("----- batch: %+v\n", o.curDocs)
 
 	events := make([]ParsedEvent, 0, len(o.curDocs))
 
@@ -277,8 +300,16 @@ func (o *OplogReader) readAndHandleOneBatch(
 		case "n":
 		case "c":
 			if op.CmdName != "applyOps" {
-				if true || o.onDDLEvent == onDDLEventAllow {
+				if o.onDDLEvent == onDDLEventAllow {
 					o.logIgnoredDDL(rawDoc)
+					continue
+				}
+
+				if !op.TS.After(allowDDLBeforeTS) {
+					o.logger.Info().
+						Any("event", rawDoc).
+						Msg("Ignoring unrecognized write from the past.")
+
 					continue
 				}
 

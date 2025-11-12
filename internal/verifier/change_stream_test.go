@@ -292,7 +292,15 @@ func (suite *IntegrationTestSuite) TestChangeStream_Resume_NoSkip() {
 		suite.T(),
 		func() bool {
 			var err error
-			originalResumeToken, err = changeStreamMetaColl.FindOne(ctx, bson.D{}).Raw()
+
+			select {
+			case <-verifier1.srcChangeReader.getError().Ready():
+				suite.Require().NoError(verifier1.srcChangeReader.getError().Get(), "reader failed: %v", verifier1.srcChangeReader.getError().Get())
+				panic("huh??") // unreachable
+			default:
+				originalResumeToken, err = changeStreamMetaColl.FindOne(ctx, bson.D{}).Raw()
+			}
+
 			return err == nil
 		},
 		time.Minute,
@@ -347,7 +355,7 @@ func (suite *IntegrationTestSuite) TestChangeStream_Resume_NoSkip() {
 			return !bytes.Equal(rt, originalResumeToken)
 		},
 		time.Minute,
-		50*time.Millisecond,
+		500*time.Millisecond,
 		"should see a new change stream resume token persisted",
 	)
 
