@@ -8,6 +8,7 @@ import (
 	"github.com/10gen/migration-verifier/agg/helpers"
 	"github.com/10gen/migration-verifier/internal/types"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/internal/verifier/namespaces"
 	"github.com/10gen/migration-verifier/internal/verifier/oplog"
 	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/10gen/migration-verifier/option"
@@ -17,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
+	"golang.org/x/exp/slices"
 )
 
 // OplogReader reads change events via oplog tailing instead of a change stream.
@@ -95,7 +97,7 @@ func (o *OplogReader) start(ctx context.Context) error {
 					// plain ops: one write per op
 					append(
 						agg.And{agg.In("$op", "d", "i", "u")},
-						getOplogDefaultNSExclusions("$$ROOT")...,
+						o.getDefaultNSExclusions("$$ROOT")...,
 					),
 
 					// op=c is for applyOps, and also to detect forbidden DDL.
@@ -146,7 +148,7 @@ func (o *OplogReader) start(ctx context.Context) error {
 							Input: agg.Filter{
 								Input: "$o.applyOps",
 								As:    "opEntry",
-								Cond:  getOplogDefaultNSExclusions("$$opEntry"),
+								Cond:  o.getDefaultNSExclusions("$$opEntry"),
 							},
 							As: "opEntry",
 							In: bson.D{
@@ -336,19 +338,23 @@ func (o *OplogReader) readAndHandleOneBatch(
 	return nil
 }
 
-func getOplogDefaultNSExclusions(docroot string) agg.And {
-	return agg.And{
-		// TODO: This logic is for all-namespace listening.
-		// If ns filtering is in play we need something smarter.
-		agg.Not{helpers.StringHasPrefix{
-			FieldRef: docroot + ".ns",
-			Prefix:   "config.",
-		}},
-		agg.Not{helpers.StringHasPrefix{
-			FieldRef: docroot + ".ns",
-			Prefix:   "admin.",
-		}},
-	}
+func (o *OplogReader) getDefaultNSExclusions(docroot string) agg.And {
+	prefixes := append(
+		slices.Clone(namespaces.MongosyncMetaDBPrefixes),
+		o.metaDB.Name()+".",
+		"config.",
+		"admin.",
+	)
+
+	return agg.And(lo.Map(
+		prefixes,
+		func(prefix string, _ int) any {
+			return agg.Not{helpers.StringHasPrefix{
+				FieldRef: docroot + ".ns",
+				Prefix:   prefix,
+			}}
+		},
+	))
 }
 
 func getOplogDocLenExpr(docroot string) any {

@@ -5,18 +5,12 @@ import (
 
 	"github.com/10gen/migration-verifier/internal/logger"
 	"github.com/10gen/migration-verifier/internal/util"
+	"github.com/10gen/migration-verifier/internal/verifier/namespaces"
 	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/10gen/migration-verifier/mslices"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
-)
-
-var (
-	MongosyncMetaDBPrefixes = mslices.Of(
-		"mongosync_internal_",
-		"mongosync_reserved_",
-	)
 )
 
 var (
@@ -52,7 +46,7 @@ func ListAllUserNamespaces(
 	dbNames, err := client.ListDatabaseNames(ctx, bson.D{
 		{"$and", []bson.D{
 			{{"name", bson.D{{"$nin", excluded}}}},
-			util.ExcludePrefixesQuery("name", MongosyncMetaDBPrefixes),
+			util.ExcludePrefixesQuery("name", namespaces.MongosyncMetaDBPrefixes),
 		}},
 	})
 
