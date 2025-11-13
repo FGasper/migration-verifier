@@ -46,8 +46,8 @@ jobs:
             toHashedIndexKey: true
 
         # versions are: source, destination
-        mongodb_versions: []
-#          - [ '4.2', '4.2' ]
+        mongodb_versions:
+          - [ '4.2', '4.2' ]
 #          - [ '4.2', '4.4' ]
 #          - [ '4.2', '5.0' ]
 #          - [ '4.2', '6.0' ]
