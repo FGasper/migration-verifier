@@ -109,12 +109,12 @@ jobs:
         with:
           go-version: stable
 
+      # NB: We use old pymongo to retain support for pre-v4.2 server.
       - name: Install m and mtools
         run: |-
             {
                 echo npm install -g m
-                echo pip install pymongo==4.3.2
-                echo pip install 'mtools[all]'
+                echo pip install pymongo==4.3.2 'mtools[all]'
             } | parallel
 
       - name: Install MongoDB ${{ matrix.mongodb_versions[0] }} (source)
