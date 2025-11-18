@@ -262,11 +262,11 @@ func (v *Verifier) srcHasSampleRate() bool {
 	srcVersion := v.srcClusterInfo.VersionArray
 
 	switch {
-	case srcVersion[0] < 4:
-		return false
 	case srcVersion[0] > 4:
 		return true
-	default:
+	case srcVersion[0] == 4:
 		return srcVersion[1] >= 4
+	default:
+		return false
 	}
 }
