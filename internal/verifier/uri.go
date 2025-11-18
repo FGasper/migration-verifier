@@ -79,7 +79,15 @@ func (verifier *Verifier) maybeSuggestHashedComparisonOptimization() {
 }
 
 func isVersionSupported(version []int) bool {
-	return version[0] >= 4
+	if version[0] >= 4 {
+		return true
+	}
+
+	if version[0] < 3 {
+		return false
+	}
+
+	return version[1] >= 6
 }
 
 func (verifier *Verifier) SetDstURI(ctx context.Context, uri string) error {
