@@ -261,5 +261,12 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 func (v *Verifier) srcHasSampleRate() bool {
 	srcVersion := v.srcClusterInfo.VersionArray
 
-	return srcVersion[0] > 4 || srcVersion[1] >= 4
+	switch {
+	case srcVersion[0] < 4:
+		return false
+	case srcVersion[0] > 4:
+		return true
+	default:
+		return srcVersion[1] >= 4
+	}
 }
