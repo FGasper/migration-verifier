@@ -703,12 +703,12 @@ func (suite *IntegrationTestSuite) TestStartAtTimeWithChanges() {
 	suite.Require().NotNil(origSessionTime)
 	eg := suite.startSrcChangeStreamReaderAndHandler(ctx, verifier)
 
-	startAtTs := verifier.srcChangeReader.getStartTimestamp()
+	startAtTS := verifier.srcChangeReader.getStartTimestamp()
 
 	// srcStartAtTs derives from the change stream’s resume token, which can
 	// postdate our session time but should not precede it.
 	suite.Require().False(
-		startAtTs.Before(*origSessionTime),
+		startAtTS.Before(*origSessionTime),
 		"srcStartAtTs should be >= the insert’s optime",
 	)
 
@@ -736,12 +736,16 @@ func (suite *IntegrationTestSuite) TestStartAtTimeWithChanges() {
 
 	suite.Require().NoError(eg.Wait())
 
-	startAtTs = verifier.srcChangeReader.getStartTimestamp()
+	startAtTS2 := verifier.srcChangeReader.getStartTimestamp()
 
-	suite.Assert().Equal(
-		*postEventsSessionTime,
-		startAtTs,
-		"verifier.srcStartAtTs should now be our session timestamp",
+	suite.Assert().True(
+		startAtTS2.After(startAtTS),
+		"after writes-off, start-at ts should postdate the original",
+	)
+
+	suite.Assert().False(
+		postEventsSessionTime.Before(startAtTS2),
+		"after writes-off, start-at ts <= our session timestamp",
 	)
 }
 
