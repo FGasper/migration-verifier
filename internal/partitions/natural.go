@@ -34,7 +34,7 @@ func PartitionCollectionNaturalOrder(
 	idealPartitionBytes types.ByteCount,
 	subLogger *logger.Logger,
 ) (chan mo.Result[Partition], error) {
-	pChan := make(chan mo.Result[Partition])
+	pChan := make(chan mo.Result[Partition], 1)
 
 	// Avoid storing a null upper limit. See architecture
 	// documentation for rationale.
@@ -73,6 +73,7 @@ func PartitionCollectionNaturalOrder(
 		return nil, errors.Wrapf(err, "parsing hostname in isMaster")
 	}
 
+	// ----------------
 	err = chanutil.WriteWithDoneCheck(
 		ctx,
 		pChan,
@@ -89,6 +90,9 @@ func PartitionCollectionNaturalOrder(
 	if err != nil {
 		return nil, err
 	}
+
+	close(pChan)
+	// ---------------
 
 	/*
 
