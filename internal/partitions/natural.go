@@ -78,7 +78,11 @@ func PartitionCollectionNaturalOrder(
 		ctx,
 		pChan,
 		mo.Ok(Partition{
-			Natural:         true,
+			Natural: true,
+			Ns: &Namespace{
+				DB:   coll.Database().Name(),
+				Coll: coll.Name(),
+			},
 			HostnameAndPort: option.Some(hostnameAndPort),
 			Key: PartitionKey{
 				Lower: bsontools.ToRawValue(bson.Null{}),
