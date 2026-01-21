@@ -23,9 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NB: This is the only setup we’re supporting with 4.0.
           - mongodb_versions: [ '4.0', '8.0' ]
             topology: replset
+
+          - mongodb_versions: [ '4.0', '8.0' ]
+            topology: sharded
 
           # Testing fallback when `hello` isn’t implemented
           # (but appendOplogNote is).
