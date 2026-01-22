@@ -90,7 +90,7 @@ func PartitionCollectionNaturalOrder(
 		// Discard the actual document. All we want are the resume tokens.
 		{"projection", bson.D{
 			{"_id", 0},
-			{"_", bson.D{{"$literal", true}}},
+			//{"_", bson.D{{"$literal", true}}},
 		}},
 
 		{"comment", "partition"},
