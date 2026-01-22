@@ -543,137 +543,171 @@ func (verifier *Verifier) getFetcherChannelsAndCallbacksForNaturalPartition(
 	// as on the source. (Otherwise we’ll incur read amplification on the
 	// destination.)
 	readDstCallback := func(ctx context.Context, state retry.SuccessNotifier) error {
-		defer func() {
-			close(dstToCompareChannel)
-		}()
-
-		sess, err := verifier.dstClient.StartSession()
-		if err != nil {
-			return errors.Wrapf(err, "starting session")
-		}
-		defer sess.EndSession(ctx)
-
-		sctx := mongo.NewSessionContext(ctx, sess)
-
-		coll := verifier.dstClientCollection(task)
-
-		for {
-			docIDsOpt, err := chanutil.ReadWithDoneCheck(sctx, srcToDstChannel)
-
-			if err != nil {
-				return err
-			}
-			docIDs, isOpen := docIDsOpt.Get()
-			if !isOpen {
-				state.NoteSuccess("saw channel from source closed")
-				break
-			}
-
-			state.NoteSuccess("received %d doc IDs from source to fetch", len(docIDs))
-
-			dupeTask := *task
-			dupeTask.Ids = mslices.Map1(
-				docIDs,
-				func(id compare.DocID) bson.RawValue {
-					return id.ID
-				},
-			)
-
-			verifier.logger.Trace().
-				Any("task", task.PrimaryKey).
-				Int("count", len(docIDs)).
-				Msg("Querying dst for documents.")
-
-			cursorStartTime := time.Now()
-
-			cursor, err := verifier.getDocumentsCursor(
-				sctx,
-				coll,
-				verifier.dstClusterInfo,
-				verifier.dstChangeReader.getStartTimestamp(),
-				&dupeTask,
-			)
-
-			for _, id := range docIDs {
-				id.Free()
-			}
-
-			if err != nil {
-				return errors.Wrapf(err, "finding %d documents", len(docIDs))
-			}
-
-			state.NoteSuccess("opened dst find cursor")
-
-			verifier.logger.Trace().
-				Any("task", task.PrimaryKey).
-				Int("idsInQuery", len(docIDs)).
-				Msg("Iterating dst cursor.")
-
-			dstDocsFound, err := iterateCursorToChannel(sctx, state, cursor, dstToCompareChannel)
-
-			if err != nil {
-				return errors.Wrap(
-					err,
-					"failed to send documents from destination to compare",
-				)
-			}
-
-			verifier.logger.Trace().
-				Any("task", task.PrimaryKey).
-				Int("docsFound", dstDocsFound).
-				Stringer("elapsed", time.Since(cursorStartTime)).
-				Msg("Done iterating dst cursor.")
-
-			// The compare thread, to prevent OOMs, always reads documents
-			// from the src & dst together. It only stops listening on one
-			// side or the other when the channel closes. This is fine for
-			// ID-partitioned verification because there is exactly 1 query
-			// per partition & cluster.
-			//
-			// With natural partitioning, though, the destination runs
-			// a separate query for each document batch from the source.
-			// So if there are missing documents on the destination, we’ll
-			// block the compare thread unless the destination “compensates”
-			// by sending dummy values. We do that here.
-			missingDocsCount := len(docIDs) - dstDocsFound
-
-			lo.Assertf(
-				missingDocsCount >= 0,
-				"dest docs (%d) must be <= source docs (%d)",
-				dstDocsFound,
-				len(docIDs),
-			)
-
-			if missingDocsCount > 0 {
-				verifier.logger.Trace().
-					Any("task", task.PrimaryKey).
-					Int("count", missingDocsCount).
-					Msg("Sending dummy dst docs to compare thread.")
-			}
-
-			for i := range missingDocsCount {
-				err := chanutil.WriteWithDoneCheck(
-					ctx,
-					dstToCompareChannel,
-					compare.DocWithTS{},
-				)
-				if err != nil {
-					return errors.Wrapf(err, "sending dummy doc %d of %d dst->compare", 1+i, missingDocsCount)
-				}
-
-				state.NoteSuccess(
-					"sent dummy doc #%d of %d to compare thread",
-					1+i,
-					missingDocsCount,
-				)
-			}
-
-		}
-
-		return nil
+		return verifier.readNaturalPartitionFromDestination(
+			ctx,
+			state,
+			task,
+			srcToDstChannel,
+			dstToCompareChannel,
+		)
 	}
 
 	return srcToCompareChannel, dstToCompareChannel, readSrcCallback, readDstCallback, nil
+}
+
+func (verifier *Verifier) readNaturalPartitionFromDestination(
+	ctx context.Context,
+	state retry.SuccessNotifier,
+	task *tasks.Task,
+	fromSrc <-chan []compare.DocID,
+	toCompare chan<- compare.DocWithTS,
+) error {
+	defer func() {
+		close(toCompare)
+	}()
+
+	sess, err := verifier.dstClient.StartSession()
+	if err != nil {
+		return errors.Wrapf(err, "starting session")
+	}
+	defer sess.EndSession(ctx)
+
+	coll := verifier.dstClientCollection(task)
+
+	for {
+		docIDsOpt, err := chanutil.ReadWithDoneCheck(ctx, fromSrc)
+
+		if err != nil {
+			return err
+		}
+		docIDs, isOpen := docIDsOpt.Get()
+		if !isOpen {
+			state.NoteSuccess("saw channel from source closed")
+			break
+		}
+
+		verifier.logger.Trace().
+			Any("task", task.PrimaryKey).
+			Int("count", len(docIDs)).
+			Msg("Received document IDs from source.")
+
+		state.NoteSuccess("received %d doc IDs from source to fetch", len(docIDs))
+
+		eg, egCtx := contextplus.ErrGroup(ctx)
+
+		sctx := mongo.NewSessionContext(egCtx, sess)
+
+		for idsChunk := range mslices.Chunk(docIDs, 1000) {
+			eg.Go(func() error {
+				defer func() {
+					for _, id := range idsChunk {
+						id.Free()
+					}
+				}()
+
+				dupeTask := *task
+				dupeTask.Ids = mslices.Map1(
+					idsChunk,
+					func(id compare.DocID) bson.RawValue {
+						return id.ID
+					},
+				)
+
+				verifier.logger.Trace().
+					Any("task", task.PrimaryKey).
+					Int("count", len(idsChunk)).
+					Msg("Querying dst for chunk of documents.")
+
+				cursorStartTime := time.Now()
+
+				cursor, err := verifier.getDocumentsCursor(
+					sctx,
+					coll,
+					verifier.dstClusterInfo,
+					verifier.dstChangeReader.getStartTimestamp(),
+					&dupeTask,
+				)
+
+				if err != nil {
+					return errors.Wrapf(err, "finding %d documents", len(docIDs))
+				}
+
+				state.NoteSuccess("opened dst find cursor")
+
+				verifier.logger.Trace().
+					Any("task", task.PrimaryKey).
+					Int("idsInQuery", len(docIDs)).
+					Msg("Iterating dst cursor.")
+
+				dstDocsFound, err := iterateCursorToChannel(sctx, state, cursor, toCompare)
+
+				if err != nil {
+					return errors.Wrap(
+						err,
+						"failed to send documents from destination to compare",
+					)
+				}
+
+				verifier.logger.Trace().
+					Any("task", task.PrimaryKey).
+					Int("docsFound", dstDocsFound).
+					Stringer("elapsed", time.Since(cursorStartTime)).
+					Msg("Done iterating dst cursor.")
+
+				// The compare thread, to prevent OOMs, always reads documents
+				// from the src & dst together. It only stops listening on one
+				// side or the other when the channel closes. This is fine for
+				// ID-partitioned verification because there is exactly 1 query
+				// per partition & cluster.
+				//
+				// With natural partitioning, though, the destination runs
+				// a separate query for each document batch from the source.
+				// So if there are missing documents on the destination, we’ll
+				// block the compare thread unless the destination “compensates”
+				// by sending dummy values. We do that here.
+				missingDocsCount := len(docIDs) - dstDocsFound
+
+				lo.Assertf(
+					missingDocsCount >= 0,
+					"dest docs (%d) must be <= source docs (%d)",
+					dstDocsFound,
+					len(docIDs),
+				)
+
+				if missingDocsCount > 0 {
+					verifier.logger.Trace().
+						Any("task", task.PrimaryKey).
+						Int("count", missingDocsCount).
+						Msg("Sending dummy dst docs to compare thread.")
+				}
+
+				for i := range missingDocsCount {
+					err := chanutil.WriteWithDoneCheck(
+						egCtx,
+						toCompare,
+						compare.DocWithTS{},
+					)
+					if err != nil {
+						return errors.Wrapf(err, "sending dummy doc %d of %d dst->compare", 1+i, missingDocsCount)
+					}
+
+					state.NoteSuccess(
+						"sent dummy doc #%d of %d to compare thread",
+						1+i,
+						missingDocsCount,
+					)
+				}
+
+				return nil
+			})
+		}
+
+		if err := eg.Wait(); err != nil {
+			return errors.Wrapf(err, "destination reader")
+		}
+	}
+
+	return nil
 }
 
 func (verifier *Verifier) getFetcherChannelsAndCallbacksForIDPartition(

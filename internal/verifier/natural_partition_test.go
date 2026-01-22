@@ -47,6 +47,8 @@ func (suite *IntegrationTestSuite) skipUnlessCanPartitionNatural() [3]int {
 }
 
 func (suite *IntegrationTestSuite) TestNaturalPartitionE2E() {
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+
 	version := suite.skipUnlessCanPartitionNatural()
 
 	ctx := suite.T().Context()
