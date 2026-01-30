@@ -23,8 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NB: This is the only setup we’re supporting with 4.0.
           - mongodb_versions: [ '4.0', '8.0' ]
+            topology: replset
+            partitioningScheme: _id
+            srcChangeReader: changeStream
+            dstChangeReader: changeStream
+
+          - mongodb_versions: [ '4.0.3', '8.0' ]
             topology: replset
             partitioningScheme: _id
             srcChangeReader: changeStream
