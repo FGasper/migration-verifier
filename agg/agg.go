@@ -36,6 +36,30 @@ func (g Gt) MarshalBSON() ([]byte, error) {
 
 // ---------------------------------------------
 
+type Gte [2]any
+
+func (g Gte) MarshalBSON() ([]byte, error) {
+	return bson.Marshal(bson.D{{"$gte", [2]any(g)}})
+}
+
+// ---------------------------------------------
+
+type Lt [2]any
+
+func (g Lt) MarshalBSON() ([]byte, error) {
+	return bson.Marshal(bson.D{{"$lt", [2]any(g)}})
+}
+
+// ---------------------------------------------
+
+type Lte [2]any
+
+func (g Lte) MarshalBSON() ([]byte, error) {
+	return bson.Marshal(bson.D{{"$lte", [2]any(g)}})
+}
+
+// ---------------------------------------------
+
 func In[T any](needle any, haystack []T) bson.D {
 	return bson.D{{"$in", bson.A{needle, haystack}}}
 }

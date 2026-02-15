@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/10gen/migration-verifier/agg"
 	"github.com/10gen/migration-verifier/internal/partitions"
 	"github.com/10gen/migration-verifier/internal/retry"
 	"github.com/10gen/migration-verifier/internal/util"
@@ -86,6 +87,25 @@ func (verifier *Verifier) createPartitionTasksWithSampleRate(
 	return partitionsCount, err
 }
 
+func getTopID(
+	ctx context.Context,
+	coll *mongo.Collection,
+) (bson.RawValue, error) {
+	raw, err := coll.FindOne(
+		ctx,
+		bson.D{},
+		options.FindOne().
+			SetSort(bson.D{{"_id", -1}}),
+	).Raw()
+	if err != nil {
+		return bson.RawValue{}, errors.Wrap(err, "sending query")
+	}
+
+	id, err := raw.LookupErr("_id")
+
+	return id, errors.Wrapf(err, "extracting %#q from document", "_id")
+}
+
 func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 	ctx context.Context,
 	fi *retry.FuncInfo,
@@ -95,11 +115,17 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 	srcColl := verifier.srcClientCollection(task)
 	srcNs := FullName(srcColl)
 
+	topID, err := getTopID(ctx, srcColl)
+	if err != nil {
+		return 0, errors.Wrapf(err, "finding %#q’s top %#q", util.FullName(srcColl), "_id")
+	}
+
 	pipeline := mongo.Pipeline{
 		// NB: $sort MUST precede $project in order to avoid a blocking sort
 		// in pre-v6 server versions.
 		{{"$sort", bson.D{{"_id", 1}}}},
 		{{"$project", bson.D{{"_id", 1}}}},
+		{{"$match", bson.D{{"$expr", agg.Lt{"$_id", topID}}}}},
 	}
 
 	lowerBoundOpt, err := verifier.findLatestPartitionUpperBound(ctx, srcNs)
@@ -239,7 +265,7 @@ func (verifier *Verifier) createPartitionTasksWithSampleRateRetryable(
 		return 0, errors.Wrapf(err, "iterating %#q’s sampling cursor", srcNs)
 	}
 
-	err = createAndInsertPartition(lowerBound, bsontools.ToRawValue(bson.MaxKey{}))
+	err = createAndInsertPartition(lowerBound, topID)
 	if err != nil {
 		return 0, err
 	}
