@@ -11,6 +11,7 @@ import (
 	"github.com/10gen/migration-verifier/internal/verifier/namespaces"
 	"github.com/10gen/migration-verifier/mbson"
 	"github.com/10gen/migration-verifier/mmongo"
+	"github.com/10gen/migration-verifier/mslices"
 	"github.com/10gen/migration-verifier/option"
 	mapset "github.com/deckarep/golang-set/v2"
 	clone "github.com/huandu/go-clone/generic"
@@ -423,34 +424,37 @@ func (csr *ChangeStreamReader) createChangeStream(
 		}
 	}
 
-	startTs, err := csr.resumeTokenTSExtractor(changeStream.ResumeToken())
+	tokenTs, err := csr.resumeTokenTSExtractor(changeStream.ResumeToken())
 	if err != nil {
 		changeStream.Close(sctx)
 		return bson.Timestamp{}, errors.Wrap(err, "failed to extract timestamp from change stream's resume token")
 	}
 
-	// With sharded clusters the resume token might lead the cluster time
-	// by 1 increment. In that case we need the actual cluster time;
-	// otherwise we will get errors.
-	clusterTime, err := util.GetClusterTimeFromSession(sess)
-	if err != nil {
-		changeStream.Close(sctx)
-		return bson.Timestamp{}, errors.Wrap(err, "failed to read cluster time from session")
-	}
+	var startTs bson.Timestamp
 
-	if startTs.After(clusterTime) {
+	if csr.clusterInfo.Topology == util.TopologySharded {
+
+		// With sharded clusters the resume token might lead the cluster time
+		// by 1 increment. In that case we need the actual cluster time;
+		// otherwise we will get errors.
+		clusterTime, err := util.GetClusterTimeFromSession(sess)
+		if err != nil {
+			changeStream.Close(sctx)
+			return bson.Timestamp{}, errors.Wrap(err, "failed to read cluster time from session")
+		}
+
+		startTs = slices.MinFunc(
+			mslices.Of(clusterTime, tokenTs),
+			bson.Timestamp.Compare,
+		)
+
 		csr.logger.Debug().
-			Any("resumeTokenTimestamp", startTs).
+			Any("resumeTokenTimestamp", tokenTs).
 			Any("clusterTime", clusterTime).
-			Stringer("changeStreamReader", csr).
-			Msg("Cluster time predates resume token; using it as start timestamp.")
-
-		startTs = clusterTime
+			Any("startTimestamp", startTs).
+			Msg("Determined start timestamp (lesser of token & cluster).")
 	} else {
-		csr.logger.Debug().
-			Any("resumeTokenTimestamp", startTs).
-			Stringer("changeStreamReader", csr).
-			Msg("Got start timestamp from change stream.")
+		startTs = tokenTs
 	}
 
 	csr.changeStream = changeStream

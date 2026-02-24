@@ -1,6 +1,8 @@
 package util
 
 import (
+	"fmt"
+
 	"github.com/10gen/migration-verifier/mbson"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -11,7 +13,7 @@ func GetClusterTimeFromSession(sess *mongo.Session) (bson.Timestamp, error) {
 	clusterTimeRaw := sess.ClusterTime()
 
 	if clusterTimeRaw == nil {
-		panic("found empty session cluster time but need nonempty")
+		return bson.Timestamp{}, fmt.Errorf("session’s cluster time is empty")
 	}
 
 	ctrv, err := clusterTimeRaw.LookupErr("$clusterTime", "clusterTime")
