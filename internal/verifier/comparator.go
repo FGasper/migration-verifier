@@ -102,7 +102,7 @@ func (c *comparator) readBatches(
 					len(docs),
 				)
 
-				c.fi.NoteSuccess("received document from source")
+				c.fi.NoteSuccess("received %d docs from source", len(docs))
 				c.recordSrcMetrics(docs)
 				srcBatch = docs
 			}
@@ -130,7 +130,7 @@ func (c *comparator) readBatches(
 					len(docs),
 				)
 
-				c.fi.NoteSuccess("received document from destination")
+				c.fi.NoteSuccess("received %d docs from destination", len(docs))
 				dstBatch = docs
 			}
 			return nil
@@ -140,6 +140,12 @@ func (c *comparator) readBatches(
 	if err := eg.Wait(); err != nil {
 		return nil, nil, errors.Wrap(err, "failed to read documents")
 	}
+
+	c.fi.NoteSuccess(
+		"received %d src docs and %d dst docs",
+		len(srcBatch),
+		len(dstBatch),
+	)
 
 	return srcBatch, dstBatch, nil
 }
