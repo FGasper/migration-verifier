@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,6 +85,9 @@ type connection struct {
 	// awaitRemainingBytes indicates the size of server response that was not completely
 	// read before returning the connection to the pool.
 	awaitRemainingBytes *int32
+
+	// cache of messages read from server
+	dst []byte
 }
 
 // newConnection handles the creation of a connection. It does not connect the connection.
@@ -393,7 +397,7 @@ func (c *connection) write(ctx context.Context, wm []byte) (err error) {
 	return err
 }
 
-// readWireMessage reads a wiremessage from the connection. The dst parameter will be overwritten.
+// readWireMessage reads a wiremessage from the connection.
 func (c *connection) readWireMessage(ctx context.Context) ([]byte, error) {
 	if atomic.LoadInt64(&c.state) != connConnected {
 		return nil, ConnectionError{
@@ -485,19 +489,20 @@ func (c *connection) read(ctx context.Context) (bytesRead []byte, errMsg string,
 		return nil, err.Error(), err
 	}
 
-	dst := make([]byte, size)
-	copy(dst, sizeBuf[:])
+	c.dst = slices.Grow(c.dst[:0], int(size))
 
-	n, err = io.ReadFull(c.nc, dst[4:])
+	copy(c.dst, sizeBuf[:])
+
+	n, err = io.ReadFull(c.nc, c.dst[4:])
 	if err != nil {
 		remainingBytes := size - 4 - int32(n)
 		if remainingBytes > 0 && isCSOTTimeout(err) {
 			c.awaitRemainingBytes = &remainingBytes
 		}
-		return dst, "incomplete read of full message", err
+		return nil, "incomplete read of full message", err
 	}
 
-	return dst, "", nil
+	return c.dst, "", nil
 }
 
 func (c *connection) close() error {
