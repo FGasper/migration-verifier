@@ -665,6 +665,87 @@ func (suite *IntegrationTestSuite) TestGenerationalClear() {
 	suite.Assert().ElementsMatch([]any{}, results)
 }
 
+// TestChangeEventClearsMismatchAcrossTaskBoundary is a regression test for a
+// bug where, if a task-size limit caused a flush between two recheck entries
+// for the same document (mismatch + change event), the change event's clearing
+// of firstMismatchTime was lost because it landed in a different task.
+//
+// The fix ensures that all entries for the same document are processed before
+// a flush can occur.
+func (suite *IntegrationTestSuite) TestChangeEventClearsMismatchAcrossTaskBoundary() {
+	verifier := suite.BuildVerifier()
+	ctx := suite.Context()
+
+	dbName := "testDB"
+	collName := "testColl"
+
+	// Set partition size low enough that doc "a" alone fills a partition.
+	// This forces a flush boundary right before doc "b".
+	verifier.partitionSizeInBytes = 500
+
+	// Doc "a": a simple change-event recheck that fills the first partition.
+	err := verifier.insertRecheckDocs(
+		ctx,
+		mslices.Of(dbName),
+		mslices.Of(collName),
+		mslices.Of(mbson.ToRawValue("a")),
+		mslices.Of(int32(500)),
+		nil,
+		option.Some(src),
+		mslices.Of(bson.Timestamp{100, 0}),
+	)
+	suite.Require().NoError(err)
+
+	// Doc "b": a mismatch recheck AND a change event for the same document.
+	// With the old bug, the flush after "a" could split "b"'s entries across
+	// tasks if the mismatch entry sorted before the change-event entry.
+	mismatchTime := bson.NewDateTimeFromTime(time.Now())
+	err = verifier.insertRecheckDocs(
+		ctx,
+		mslices.Of(dbName),
+		mslices.Of(collName),
+		mslices.Of(mbson.ToRawValue("b")),
+		mslices.Of(int32(100)),
+		mslices.Of(mismatchTime),
+		option.None[whichCluster](),
+		nil,
+	)
+	suite.Require().NoError(err)
+
+	err = verifier.insertRecheckDocs(
+		ctx,
+		mslices.Of(dbName),
+		mslices.Of(collName),
+		mslices.Of(mbson.ToRawValue("b")),
+		mslices.Of(int32(100)),
+		nil,
+		option.Some(src),
+		mslices.Of(bson.Timestamp{200, 0}),
+	)
+	suite.Require().NoError(err)
+
+	notifier := &testutil.MockSuccessNotifier{}
+	verifier.generation++
+	err = verifier.GenerateRecheckTasks(ctx, notifier)
+	suite.Require().NoError(err)
+
+	theTasks := fetchVerifierCurrentTasks(ctx, suite.T(), verifier)
+
+	// Find the task that contains doc "b".
+	bID := mbson.ToRawValue("b")
+	for _, task := range theTasks {
+		for i, id := range task.Ids {
+			if id.Equal(bID) {
+				// The change event must have cleared doc "b"'s firstMismatchTime.
+				suite.Assert().Zero(
+					task.FirstMismatchTime[int32(i)],
+					"change event should clear firstMismatchTime even near a task boundary",
+				)
+			}
+		}
+	}
+}
+
 func insertRecheckDocs(
 	ctx context.Context,
 	verifier *Verifier,
