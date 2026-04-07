@@ -18,6 +18,7 @@ import (
 	"github.com/10gen/migration-verifier/mmongo"
 	"github.com/10gen/migration-verifier/option"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -448,74 +449,99 @@ func (verifier *Verifier) GenerateRecheckTasks(
 	// We group these here using a sort rather than using aggregate because aggregate is
 	// subject to a 16MB limit on group size.
 	for cursor.Next(ctx) {
-		var doc recheck.Doc
-		err = (&doc).UnmarshalFromBSON(cursor.Current)
+		var recheckDoc recheck.Doc
+		err = (&recheckDoc).UnmarshalFromBSON(cursor.Current)
 		if err != nil {
 			return err
 		}
 
-		idRaw := doc.PrimaryKey.DocumentID
+		idRaw := recheckDoc.PrimaryKey.DocumentID
 
-		// We persist rechecks if any of these happen:
-		// - the namespace has changed
-		// - we’ve reached the per-task recheck maximum
-		// - the buffered document IDs’ size exceeds the per-task maximum
-		// - the buffered documents exceed the partition size
-		//
-		if doc.PrimaryKey.SrcDatabaseName != prevDBName ||
-			doc.PrimaryKey.SrcCollectionName != prevCollName ||
-			len(idAccum) > maxRecheckIDs ||
-			types.ByteCount(idsSizer.Len()) >= maxRecheckIDsBytes ||
-			dataSizeAccum >= verifier.partitionSizeInBytes {
+		sameNamespace := recheckDoc.PrimaryKey.SrcDatabaseName == prevDBName &&
+			recheckDoc.PrimaryKey.SrcCollectionName == prevCollName
 
-			err := persistBufferedRechecks()
-			if err != nil {
-				return err
+		// If we’ve already seen this ID, then we don’t re-add it. We may,
+		// though, still want to incorporate the duplicate into the task’s
+		// document metadata.
+		isSameDoc := idRaw.Equal(lastIDRaw) && sameNamespace
+
+		if !isSameDoc {
+			// We persist rechecks if any of these happen:
+			// - the namespace has changed
+			// - we’ve reached the per-task recheck maximum
+			// - the buffered document IDs’ size exceeds the per-task maximum
+			// - the buffered documents exceed the partition size
+			//
+			if !sameNamespace ||
+				len(idAccum) > maxRecheckIDs ||
+				types.ByteCount(idsSizer.Len()) >= maxRecheckIDsBytes ||
+				dataSizeAccum >= verifier.partitionSizeInBytes {
+
+				err := persistBufferedRechecks()
+				if err != nil {
+					return err
+				}
+
+				prevDBName = recheckDoc.PrimaryKey.SrcDatabaseName
+				prevCollName = recheckDoc.PrimaryKey.SrcCollectionName
+				idsSizer = util.BSONArraySizer{}
+				dataSizeAccum = 0
+				idAccum = idAccum[:0]
+				lastIDRaw = bson.RawValue{}
+				clear(firstMismatchTime)
+				latestSrcTimestamp = bson.Timestamp{}
+				latestDstTimestamp = bson.Timestamp{}
 			}
-
-			prevDBName = doc.PrimaryKey.SrcDatabaseName
-			prevCollName = doc.PrimaryKey.SrcCollectionName
-			idsSizer = util.BSONArraySizer{}
-			dataSizeAccum = 0
-			idAccum = idAccum[:0]
-			lastIDRaw = bson.RawValue{}
-			clear(firstMismatchTime)
-			latestSrcTimestamp = bson.Timestamp{}
-			latestDstTimestamp = bson.Timestamp{}
 		}
 
 		// This is the index for storing info about the doc in metadata.
 		metadataIndex := int32(len(idAccum))
 
-		// If we’ve already seen this ID, then we don’t re-add it. We may,
-		// though, still want to incorporate the duplicate into the task’s
-		// document metadata.
-		isSameDoc := idRaw.Equal(lastIDRaw)
 		if isSameDoc {
 			// We’re not going to add this ID to the idAccum slice because it’s
 			// already in that slice. But we still may need to record metadata
 			// about the document. Since the document’s ID is the most recent
 			// one in idAccum, we just decrement the index to refer to that.
 			metadataIndex -= 1
+
+			lo.Assertf(
+				metadataIndex >= 0,
+				"duplicate doc needs a prior entry (metadataIndex=%d, idAccum len=%d)",
+				metadataIndex,
+				len(idAccum),
+			)
 		}
 
-		if optime, has := doc.ChangeOpTime.Get(); has {
+		// If a change event happens, we need to clear the document’s
+		// first mismatch time, even if a mismatch is also seen. This needs to
+		// happen whether the change precedes the mismatch, or follows it.
+		if optime, has := recheckDoc.ChangeOpTime.Get(); has {
+			// The recheck is for a change event. Update timestamps, and
+			// clear the document’s first mismatch time.
+
 			// A recheck should either be for a change/write or a mismatch.
 			// Never both.
-			if doc.FirstMismatchTime.IsSome() {
+			if recheckDoc.FirstMismatchTime.IsSome() {
 				panic("should not see change optime with a first-mismatch time")
 			}
 
-			if doc.FromDst {
+			if recheckDoc.FromDst {
 				latestDstTimestamp = newerTimestamp(latestDstTimestamp, optime)
 			} else {
 				latestSrcTimestamp = newerTimestamp(latestSrcTimestamp, optime)
 			}
 
 			delete(firstMismatchTime, int32(metadataIndex))
-		} else if fmt, has := doc.FirstMismatchTime.Get(); has {
+		} else if fmTime, has := recheckDoc.FirstMismatchTime.Get(); has {
+			// The recheck is for a mismatch. If we already saw a change event
+			// for this document then we need to discard the document’s
+			// first mismatch time. To do that, we note that, since there can
+			// be only 1 mismatch for a given document, isSameDoc is true here
+			// if & only if a change event preceded the mismatch. Thus, we only
+			// preserve the mismatch time if this is the first time we’ve seen
+			// the document.
 			if !isSameDoc {
-				firstMismatchTime[metadataIndex] = fmt
+				firstMismatchTime[metadataIndex] = fmTime
 			}
 		}
 
@@ -526,11 +552,11 @@ func (verifier *Verifier) GenerateRecheckTasks(
 		lastIDRaw = idRaw
 
 		idsSizer.Add(idRaw)
-		dataSizeAccum += types.ByteCount(doc.DataSize)
+		dataSizeAccum += types.ByteCount(recheckDoc.DataSize)
 
-		idAccum = append(idAccum, doc.PrimaryKey.DocumentID)
+		idAccum = append(idAccum, recheckDoc.PrimaryKey.DocumentID)
 
-		totalRecheckData += types.ByteCount(doc.DataSize)
+		totalRecheckData += types.ByteCount(recheckDoc.DataSize)
 		totalDocs++
 	}
 
