@@ -197,6 +197,10 @@ func (suite *IntegrationTestSuite) TestTimeSeries_BucketsOnly() {
 
 	suite.skipIfNoTimeseries()
 
+	if util.ClusterHasRawData([2]int(suite.BuildVerifier().srcClusterInfo.VersionArray)) {
+		suite.T().Skip("skipping test on clusters with raw data")
+	}
+
 	dbName := suite.DBNameForTest()
 	db := suite.srcMongoClient.Database(dbName)
 	collName := "weather"
