@@ -60,10 +60,17 @@ func (suite *IntegrationTestSuite) TestTimeSeries_Partition() {
 
 	suite.skipIfNoTimeseries()
 
+	srcInfo := suite.BuildVerifier().srcClusterInfo
+
 	dbName := suite.DBNameForTest()
 	db := suite.srcMongoClient.Database(dbName)
 	collName := "weather"
-	bucketsCollName := timeseries.BucketPrefix + collName
+
+	bucketsCollName := lo.Ternary(
+		util.ClusterHasRawData([2]int(srcInfo.VersionArray)),
+		collName,
+		timeseries.BucketPrefix+collName,
+	)
 
 	suite.Require().NoError(
 		db.CreateCollection(
@@ -99,6 +106,9 @@ func (suite *IntegrationTestSuite) TestTimeSeries_Partition() {
 		ctx,
 		logger.NewDebugLogger(),
 		db.Collection(bucketsCollName),
+		partitions.GetSizeAndDocumentCountOptions{
+			RawData: util.ClusterHasRawData([2]int(srcInfo.VersionArray)),
+		},
 	)
 	suite.Require().NoError(err)
 
