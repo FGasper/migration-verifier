@@ -231,6 +231,8 @@ func (verifier *Verifier) insertRecheckDocs(
 		)
 	}
 
+	verifier.metrics.recordRecheckPersistDuration(ctx, time.Since(start))
+
 	if time.Since(start) > time.Second {
 		verifier.logger.Warn().
 			Int("count", len(documentIDs)).

@@ -199,7 +199,10 @@ func (verifier *Verifier) CheckWorker(ctxIn context.Context) error {
 // claim, or nil if a check is already running.
 func (verifier *Verifier) claimCheck() func() {
 	if verifier.running.CompareAndSwap(false, true) {
-		return func() { verifier.running.Store(false) }
+		return func() {
+			verifier.running.Store(false)
+			verifier.metrics.recordPhase(context.Background(), Idle)
+		}
 	}
 
 	return nil
@@ -254,6 +257,9 @@ func (verifier *Verifier) runClaimedCheck(
 			verifier.logger.Info().Msg("Starting new verification.")
 		}
 	}
+
+	verifier.metrics.recordGeneration(ctx, verifier.generation)
+	verifier.metrics.recordPhase(ctx, verifier.getPhaseWhileLocked())
 
 	// Now that we’ve initialized verifier.generation we can
 	// start the change readers.
@@ -384,8 +390,11 @@ func (verifier *Verifier) runClaimedCheck(
 			verifier.lastGeneration = true
 		}
 
+		generationDuration := time.Since(verifier.generationStartTime)
+		verifier.metrics.recordGenerationDuration(ctx, verifier.generation, generationDuration)
+
 		if verifier.getPhaseWhileLocked() == Recheck {
-			verifier.recheckDurations.Push(time.Since(verifier.generationStartTime))
+			verifier.recheckDurations.Push(generationDuration)
 		}
 
 		// Increment the in-memory generation so that the change readers will
@@ -395,6 +404,8 @@ func (verifier *Verifier) runClaimedCheck(
 		// derive from rechecks enqueued during generation 2.
 		verifier.generation++
 		verifier.generationStartTime = time.Now()
+		verifier.metrics.recordGeneration(ctx, verifier.generation)
+		verifier.metrics.recordPhase(ctx, verifier.getPhaseWhileLocked())
 		verifier.srcChangeReader.getEventRecorder().Reset()
 		verifier.dstChangeReader.getEventRecorder().Reset()
 
@@ -658,6 +669,8 @@ func (verifier *Verifier) work(
 		}
 
 		elapsed := time.Since(startedFind)
+		verifier.metrics.recordFindTaskDuration(ctx, elapsed)
+
 		if elapsed > findTaskTimeWarnThreshold {
 			verifier.logger.Warn().
 				Int("workerNum", workerNum).
@@ -847,6 +860,10 @@ func (v *Verifier) initializeChangeReaders() error {
 		)
 	default:
 		return fmt.Errorf("bad destination change reader: %#q", v.dstChangeReaderMethod)
+	}
+
+	if err := v.metrics.observeChangeReaders(v.srcChangeReader, v.dstChangeReader); err != nil {
+		return fmt.Errorf("observing change readers for metrics: %w", err)
 	}
 
 	return nil
